@@ -29,6 +29,10 @@ export const api = {
   // Health
   health: () => http<HealthResponse>("/api/health"),
 
+  // Models
+  getAvailableModels: () =>
+    http<{ data: Array<{ id: string; name: string; provider: string }> }>("/api/models"),
+
   // Auth
   register: (email: string, password: string, full_name?: string) =>
     http<User>("/api/auth/register", {

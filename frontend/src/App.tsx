@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import ThreadSidebar from "./components/chat/ThreadSidebar";
 import { api } from "./lib/api";
 import { useAuthStore } from "./lib/authStore";
-import { AVAILABLE_MODELS, useSettingsStore } from "./lib/settingsStore";
+import { useSettingsStore } from "./lib/settingsStore";
 import ChatPage from "./pages/ChatPage";
 import LoginPage from "./pages/LoginPage";
 
@@ -36,6 +36,12 @@ function AuthenticatedApp() {
     refetchInterval: 30_000,
   });
 
+  const loadAvailableModels = useSettingsStore((s) => s.loadAvailableModels);
+
+  useEffect(() => {
+    loadAvailableModels();
+  }, [loadAvailableModels]);
+
   return (
     <div className="app-backdrop flex h-full min-h-0 w-full">
       <ThreadSidebar />
@@ -59,8 +65,9 @@ function TopBar({
   online: boolean;
 }) {
   const selectedModel = useSettingsStore((s) => s.selectedModel);
+  const availableModels = useSettingsStore((s) => s.availableModels);
   const setSelectedModel = useSettingsStore((s) => s.setSelectedModel);
-  const currentModel = AVAILABLE_MODELS.find((m) => m.id === selectedModel);
+  const currentModel = availableModels.find((m) => m.id === selectedModel);
 
   return (
     <header className="flex items-center justify-between gap-4 border-b border-white/5 bg-ink-900/40 px-6 py-3 backdrop-blur-xl">
@@ -85,12 +92,12 @@ function TopBar({
           <button className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm font-medium text-slate-100 transition hover:border-accent-500/50 hover:bg-white/10">
             <span className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-accent-400"></span>
-              {currentModel?.label || "Select model"}
+              {currentModel?.name || "Select model"}
             </span>
             <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
           </button>
           <div className="absolute right-0 top-full mt-1 hidden w-56 rounded-lg border border-white/10 bg-ink-950/90 shadow-xl backdrop-blur-xl group-hover:block z-50">
-            {AVAILABLE_MODELS.map((m) => (
+            {availableModels.map((m) => (
               <button
                 key={m.id}
                 onClick={() => setSelectedModel(m.id)}
@@ -101,7 +108,7 @@ function TopBar({
                     : "text-slate-300 hover:bg-white/5 hover:text-white")
                 }
               >
-                <div className="font-medium">{m.label}</div>
+                <div className="font-medium">{m.name}</div>
                 <div className="text-xs text-slate-500">{m.provider}</div>
               </button>
             ))}
