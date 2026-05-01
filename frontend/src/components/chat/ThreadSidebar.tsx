@@ -56,7 +56,7 @@ export default function ThreadSidebar() {
       <div className="px-3">
         <button
           onClick={() => createThread()}
-          className="group flex w-full items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-slate-100 transition hover:border-accent-500/50 hover:bg-white/10"
+          className="group flex w-full cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-slate-100 transition hover:border-accent-500/50 hover:bg-white/10"
         >
           <MessageSquarePlus className="h-4 w-4 text-accent-400" />
           New chat
