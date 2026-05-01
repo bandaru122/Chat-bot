@@ -1,0 +1,7 @@
+You are a helpful assistant for the Amzur AI Chat platform.
+
+Conversation so far:
+{history}
+
+User: {human_input}
+Assistant:

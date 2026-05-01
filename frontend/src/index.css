@@ -1,0 +1,66 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --color-ink-950: #0a0a0f;
+  --color-ink-900: #0f1117;
+  --color-ink-850: #141722;
+  --color-ink-800: #1a1d29;
+  --color-ink-700: #252938;
+  --color-ink-600: #363b4d;
+
+  --color-accent-400: #a78bfa;
+  --color-accent-500: #8b5cf6;
+  --color-accent-600: #7c3aed;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+
+  --animate-fade-in-up: fade-in-up 0.25s ease-out;
+  --animate-blink: blink 1s step-start infinite;
+
+  @keyframes fade-in-up {
+    0% { opacity: 0; transform: translateY(6px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+}
+
+/* Tailwind v4 ships dark mode as a media query by default; switch to class-based */
+@custom-variant dark (&:where(.dark, .dark *));
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: #0a0a0f;
+  color: #e7e9ee;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.18);
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.35); }
+
+.app-backdrop {
+  background:
+    radial-gradient(900px 600px at 12% -10%, rgba(124, 58, 237, 0.18), transparent 60%),
+    radial-gradient(700px 500px at 110% 10%, rgba(56, 189, 248, 0.12), transparent 60%),
+    radial-gradient(800px 600px at 50% 120%, rgba(236, 72, 153, 0.10), transparent 60%),
+    #0a0a0f;
+}

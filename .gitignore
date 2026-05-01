@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Env / secrets
+.env
+.env.local
+*.pem
+
+# Service account JSON keys (P9)
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!*.config.json
+
+# ChromaDB persistence (P7)
+chroma_db/
+
+# Uploads
+uploads/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+.vite/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
