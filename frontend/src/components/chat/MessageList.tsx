@@ -180,6 +180,28 @@ function Bubble({
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={{
+            img({ src, alt }) {
+              return (
+                <img
+                  src={src}
+                  alt={alt || "Generated image"}
+                  className="max-w-full h-auto rounded-lg my-2 shadow-lg"
+                  style={{ maxWidth: "100%", maxHeight: "400px" }}
+                />
+              );
+            },
+            a({ href, children }) {
+              return (
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-accent-400 hover:text-accent-300 underline"
+                >
+                  {children}
+                </a>
+              );
+            },
             code({ className, children, ...rest }) {
               const match = /language-(\w+)/.exec(className || "");
               const isBlock =
