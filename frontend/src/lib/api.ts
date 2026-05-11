@@ -26,10 +26,16 @@ function buildApiBaseCandidates(): string[] {
 
 const API_BASE_CANDIDATES = buildApiBaseCandidates();
 const REQUEST_TIMEOUT_MS = 10000;
+// LLM-backed endpoints (send/edit message) can take 30-120s depending on
+// model and query complexity. A 10s global timeout causes the frontend to
+// abort the request, the backend still completes and saves the messages, but
+// the UI shows an error. On refresh the messages reappear — confusing UX.
+// Using a generous per-call timeout removes this race.
+const LLM_REQUEST_TIMEOUT_MS = 120_000;
 
-async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+async function fetchWithTimeout(url: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, {
       ...init,
@@ -40,7 +46,7 @@ async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Respon
   }
 }
 
-async function http<T>(path: string, init?: RequestInit): Promise<T> {
+async function http<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   let lastNetworkError: unknown = null;
 
   for (const base of API_BASE_CANDIDATES) {
@@ -49,7 +55,7 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
         credentials: "include",
         headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
         ...init,
-      });
+      }, timeoutMs);
       if (!res.ok) {
         if (res.status === 401) throw new Error("UNAUTHORIZED");
         const text = await res.text();
@@ -85,6 +91,22 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   throw (lastNetworkError instanceof Error
     ? lastNetworkError
     : new Error("Unable to reach backend API"));
+}
+
+function parseErrorMessage(status: number, statusText: string, text: string): string {
+  let message = `${status} ${statusText}`;
+  try {
+    const body = JSON.parse(text);
+    const detail = body?.detail;
+    if (typeof detail === "string") message = detail;
+    else if (detail && typeof detail === "object") {
+      message = detail.message || detail.error || JSON.stringify(detail);
+    } else if (body?.message) message = body.message;
+    else if (text) message = text;
+  } catch {
+    if (text) message = text;
+  }
+  return message;
 }
 
 export const api = {
@@ -125,22 +147,29 @@ export const api = {
     }),
   deleteThread: (id: string) =>
     http<void>(`/api/threads/${id}`, { method: "DELETE" }),
-  sendMessage: (threadId: string, content: string, model?: string, mode: ChatMode = "chat") =>
+  sendMessage: (
+    threadId: string,
+    content: string,
+    model?: string,
+    mode: ChatMode = "chat",
+    useRag = true
+  ) =>
     http<ThreadDetail>(`/api/threads/${threadId}/messages`, {
       method: "POST",
-      body: JSON.stringify({ content, model, mode }),
-    }),
+      body: JSON.stringify({ content, model, mode, use_rag: useRag }),
+    }, LLM_REQUEST_TIMEOUT_MS),
   editMessage: (
     threadId: string,
     messageId: string,
     content: string,
     model?: string,
-    mode: ChatMode = "chat"
+    mode: ChatMode = "chat",
+    useRag = true
   ) =>
     http<ThreadDetail>(`/api/threads/${threadId}/messages/${messageId}`, {
       method: "PATCH",
-      body: JSON.stringify({ content, model, mode }),
-    }),
+      body: JSON.stringify({ content, model, mode, use_rag: useRag }),
+    }, LLM_REQUEST_TIMEOUT_MS),
   getSuggestions: (threadId: string) =>
     http<string[]>(`/api/threads/${threadId}/suggestions`),
   uploadFiles: async (files: File[]) => {
@@ -161,7 +190,7 @@ export const api = {
         if (!res.ok) {
           if (res.status === 401) throw new Error("UNAUTHORIZED");
           const text = await res.text();
-          throw new Error(`${res.status} ${res.statusText}: ${text}`);
+          throw new Error(parseErrorMessage(res.status, res.statusText, text));
         }
         const body = (await res.json()) as { files: UploadedFileAsset[] };
         return body.files;

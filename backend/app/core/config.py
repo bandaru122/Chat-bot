@@ -2,6 +2,7 @@
 from functools import lru_cache
 from typing import Optional
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,6 +32,34 @@ class Settings(BaseSettings):
     CRICAPI_KEY: Optional[str] = None
     THENEWSAPI_TOKEN: Optional[str] = None
     LIVE_API_TIMEOUT_SECONDS: int = 8
+    # Web-search fallback stack for live-data queries:
+    # 1) DuckDuckGo (unmetered/public)
+    # 2) Tavily (metered) only when all primary sources return no data.
+    TAVILY_API_KEY: Optional[str] = None
+    TAVILY_MAX_RESULTS: int = 3
+
+    # Resend (email delivery for MCP-style agent tools)
+    RESEND_API_KEY: Optional[str] = None
+    RESEND_FROM_EMAIL: str = "ravi.ai.agent@testmail.com"
+
+    # Brevo (Sendinblue) — alternative email provider. Preferred when set
+    # because Brevo allows sending to any recipient as soon as the sender
+    # email is verified in https://app.brevo.com/senders (no domain DNS
+    # required for the basic case). Accepts both BREVO_API_KEY and the
+    BREVO_API_KEY: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("BREVO_API_KEY"),
+    )
+    BREVO_FROM_EMAIL: Optional[str] = None
+    BREVO_FROM_NAME: str = "Amzur AI Chat"
+    # Brevo follow-up cadence — how long after the welcome send to check opens
+    # and (only if not opened) deliver the follow-up template. Default 2 min.
+    BREVO_FOLLOWUP_DELAY_SECONDS: int = 120
+    # Provider preference: "auto" (Brevo > Resend), "brevo", or "resend".
+    EMAIL_PROVIDER: str = "auto"
+
+    # MCP-style agent tool storage (reminders, notifications)
+    MCP_DATA_DIR: str = "./data"
 
     # Google OAuth
     GOOGLE_CLIENT_ID: Optional[str] = None
@@ -70,8 +99,10 @@ class Settings(BaseSettings):
         ".txt",
         ".md",
         ".csv",
+        ".tsv",
         ".pdf",
         ".json",
+        ".ipynb",
         ".docx",
         ".doc",
         ".xlsx",
@@ -80,8 +111,21 @@ class Settings(BaseSettings):
         ".xml",
         ".yaml",
         ".yml",
+        ".tex",
+        ".sql",
         ".py",
         ".js",
+        ".java",
+        ".c",
+        ".cpp",
+        ".cs",
+        ".go",
+        ".rs",
+        ".php",
+        ".rb",
+        ".sh",
+        ".srt",
+        ".vtt",
         ".ts",
         ".tsx",
         ".jsx",

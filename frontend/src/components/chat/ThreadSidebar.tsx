@@ -1,5 +1,5 @@
 import { LogOut, MessageSquarePlus, Pencil, Search, Sparkles, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuthStore } from "../../lib/authStore";
 import { useChatStore } from "../../lib/chatStore";
 
@@ -21,9 +21,14 @@ export default function ThreadSidebar({ collapsed }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [search, setSearch] = useState("");
+  const loadedOnceRef = useRef(false);
 
   useEffect(() => {
-    loadThreads();
+    // React StrictMode runs mount effects twice in development.
+    // Keep this idempotent so we don't fire overlapping load/select flows.
+    if (loadedOnceRef.current) return;
+    loadedOnceRef.current = true;
+    void loadThreads();
   }, [loadThreads]);
 
   const handleStartEdit = (id: string, currentTitle: string) => {

@@ -7,10 +7,16 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from html import unescape
 import re
 from typing import Any, Callable
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 import requests
+try:
+    from duckduckgo_search import DDGS
+except Exception:  # pragma: no cover - optional at runtime until installed
+    DDGS = None  # type: ignore[assignment]
 
 from app.core.config import settings
 
@@ -19,6 +25,21 @@ FetchResult = dict[str, Any]
 _TOPIC_STOPWORDS = {
     "what", "whats", "what's", "is", "are", "the", "a", "an", "between", "about", "of", "on", "for",
     "show", "get", "give", "find", "tell", "me", "latest", "today", "current", "live", "news", "update", "updates",
+}
+
+_SEARCH_HINTS = {
+    "search", "find", "lookup", "look up", "what", "who", "when", "where", "why", "how",
+    "news", "headline", "headlines", "topic", "latest", "update", "updates", "current",
+    "about", "war", "conflict", "price", "status", "gold", "silver", "commodity", "xau",
+    "today", "yesterday", "score", "scores", "result", "results", "ipl", "match",
+}
+
+_COMMODITY_HINTS = {"gold", "silver", "commodity", "bullion", "xau", "xag"}
+
+_REALTIME_QUERY_HINTS = {
+    "today", "yesterday", "latest", "current", "live", "now", "update", "updates",
+    "score", "scores", "result", "results", "ipl", "match", "news", "headline", "weather",
+    "temperature", "rain", "war", "conflict", "gold", "silver", "price",
 }
 
 
@@ -494,6 +515,362 @@ def _rss_ndtv() -> FetchResult:
     )
 
 
+def _strip_html(text: str) -> str:
+    clean = re.sub(r"<[^>]+>", "", text or "")
+    clean = unescape(clean)
+    return re.sub(r"\s+", " ", clean).strip()
+
+
+def _duckduckgo_search(query: str) -> FetchResult:
+    """DuckDuckGo web search for broad live/search queries.
+
+    This is the primary web-search provider because it is effectively
+    unmetered for our usage pattern. We keep it lightweight by scraping the
+    html-lite endpoint and returning top organic result snippets.
+    """
+    q = (query or "").strip()
+    if not q:
+        return {
+            "source": "web_search_duckduckgo",
+            "ok": False,
+            "error": "missing_query",
+            "message": "Query is required",
+        }
+    # 0) Library client first (most reliable; avoids HTML challenge pages).
+    if DDGS is not None:
+        try:
+            rows = DDGS().text(q, region="wt-wt", safesearch="moderate", max_results=8)
+            lib_results: list[dict[str, str]] = []
+            for r in rows or []:
+                if not isinstance(r, dict):
+                    continue
+                title = _strip_html(r.get("title") or "")
+                link = (r.get("href") or r.get("url") or "").strip()
+                snippet = _strip_html(r.get("body") or r.get("snippet") or "")
+                if title and link:
+                    lib_results.append({"title": title, "url": link, "snippet": snippet})
+                if len(lib_results) >= 8:
+                    break
+            if lib_results:
+                return {
+                    "source": "web_search_duckduckgo",
+                    "ok": True,
+                    "status_code": 200,
+                    "data": {
+                        "query": q,
+                        "results": lib_results,
+                        "provider": "duckduckgo",
+                        "mode": "ddgs",
+                    },
+                }
+        except Exception:
+            # Fall through to HTTP methods below.
+            pass
+
+    # 1) API-style endpoint first (fallback mode):
+    #    https://api.duckduckgo.com/?q=...&format=json
+    # 2) HTML endpoint fallback when instant-answer payload is sparse.
+    api_url = "https://api.duckduckgo.com/"
+    url = f"https://duckduckgo.com/html/?q={quote_plus(q)}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; amzur-ai-chat/1.0)",
+    }
+    timeout = settings.LIVE_API_TIMEOUT_SECONDS
+    try:
+        api_resp = requests.get(
+            api_url,
+            params={"q": q, "format": "json", "no_html": 1, "skip_disambig": 1},
+            headers=headers,
+            timeout=timeout,
+        )
+        api_resp.raise_for_status()
+        api_data = api_resp.json()
+    except requests.Timeout:
+        return {
+            "source": "web_search_duckduckgo",
+            "ok": False,
+            "error": "timeout",
+            "message": f"Timed out after {timeout}s",
+        }
+    except (requests.RequestException, ValueError):
+        api_data = {}
+
+    results: list[dict[str, str]] = []
+    abstract_text = _strip_html((api_data or {}).get("AbstractText") or "")
+    abstract_url = ((api_data or {}).get("AbstractURL") or "").strip()
+    abstract_src = ((api_data or {}).get("AbstractSource") or "DuckDuckGo").strip()
+    heading = _strip_html((api_data or {}).get("Heading") or "")
+    if abstract_text and abstract_url:
+        results.append(
+            {
+                "title": heading or f"Top result from {abstract_src}",
+                "url": abstract_url,
+                "snippet": abstract_text,
+            }
+        )
+
+    related = (api_data or {}).get("RelatedTopics") or []
+    for item in related[:16]:
+        if len(results) >= 8:
+            break
+        # RelatedTopics can be flat items or grouped under "Topics".
+        candidates = item.get("Topics") if isinstance(item, dict) and isinstance(item.get("Topics"), list) else [item]
+        for c in candidates:
+            if len(results) >= 8:
+                break
+            if not isinstance(c, dict):
+                continue
+            text = _strip_html(c.get("Text") or "")
+            first_url = (c.get("FirstURL") or "").strip()
+            if text and first_url:
+                title = text.split(" - ", 1)[0].strip() or "DuckDuckGo result"
+                results.append({"title": title, "url": first_url, "snippet": text})
+
+    if results:
+        return {
+            "source": "web_search_duckduckgo",
+            "ok": True,
+            "status_code": api_resp.status_code if 'api_resp' in locals() else 200,
+            "data": {
+                "query": q,
+                "results": results,
+                "provider": "duckduckgo",
+            },
+        }
+
+    # Fall back to HTML result scraping if instant-answer API had no useful rows.
+    try:
+        resp = requests.get(url, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        html = resp.text
+    except requests.Timeout:
+        return {
+            "source": "web_search_duckduckgo",
+            "ok": False,
+            "error": "timeout",
+            "message": f"Timed out after {timeout}s",
+        }
+    except requests.RequestException as exc:
+        return {
+            "source": "web_search_duckduckgo",
+            "ok": False,
+            "error": "request_error",
+            "message": str(exc),
+        }
+
+    pattern = re.compile(
+        r'<a[^>]*class="result__a"[^>]*href="(?P<url>[^"]+)"[^>]*>(?P<title>.*?)</a>.*?'
+        r'<a[^>]*class="result__snippet"[^>]*>(?P<snippet>.*?)</a>',
+        re.IGNORECASE | re.DOTALL,
+    )
+    results = []
+    for m in pattern.finditer(html):
+        title = _strip_html(m.group("title"))
+        snippet = _strip_html(m.group("snippet"))
+        link = unescape(m.group("url"))
+        if title and link:
+            results.append({"title": title, "url": link, "snippet": snippet})
+        if len(results) >= 8:
+            break
+
+    if not results:
+        # Fallback parser variant for occasional DDG markup changes.
+        quick_pattern = re.compile(
+            r'<a[^>]*class="result__a"[^>]*href="(?P<url>[^"]+)"[^>]*>(?P<title>.*?)</a>',
+            re.IGNORECASE | re.DOTALL,
+        )
+        for m in quick_pattern.finditer(html):
+            title = _strip_html(m.group("title"))
+            link = unescape(m.group("url"))
+            if title and link:
+                results.append({"title": title, "url": link, "snippet": ""})
+            if len(results) >= 8:
+                break
+
+    if not results:
+        # Final fallback for environments where direct DDG endpoints return
+        # anti-bot challenge pages (HTTP 202 + no result rows). The r.jina.ai
+        # mirror returns DDG Lite output as plain markdown, which we can parse
+        # deterministically.
+        jina_url = f"https://r.jina.ai/http://lite.duckduckgo.com/lite/?q={quote_plus(q)}"
+        try:
+            jresp = requests.get(jina_url, headers=headers, timeout=timeout)
+            jresp.raise_for_status()
+            text = jresp.text
+            lines = [ln.strip() for ln in text.splitlines()]
+            for i, ln in enumerate(lines):
+                m = re.match(r"^(\d+)\.\[(.+?)\]\((.+?)\)$", ln)
+                if not m:
+                    continue
+                title = _strip_html(m.group(2))
+                raw_url = (m.group(3) or "").strip()
+                # DDG wraps outbound links in /l/?uddg=<encoded-url>. Unwrap it.
+                try:
+                    parsed = urlparse(raw_url)
+                    qs = parse_qs(parsed.query)
+                    link = unquote((qs.get("uddg") or [raw_url])[0])
+                except Exception:
+                    link = raw_url
+                snippet = ""
+                if i + 1 < len(lines):
+                    nxt = lines[i + 1]
+                    if nxt and not re.match(r"^\d+\.\[", nxt):
+                        snippet = _strip_html(nxt)
+                if title and link:
+                    results.append({"title": title, "url": link, "snippet": snippet})
+                if len(results) >= 8:
+                    break
+            if results:
+                return {
+                    "source": "web_search_duckduckgo",
+                    "ok": True,
+                    "status_code": jresp.status_code,
+                    "data": {
+                        "query": q,
+                        "results": results,
+                        "provider": "duckduckgo",
+                        "mode": "jina-lite",
+                    },
+                }
+        except requests.RequestException:
+            pass
+
+    if results and all((r.get("snippet") or "") == "" for r in results):
+        # If the DOM pattern matched titles but not snippets, pair snippets by index.
+        snips = re.findall(
+            r'<[^>]*class="result__snippet"[^>]*>(.*?)</[^>]+>',
+            html,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        for i, s in enumerate(snips[: len(results)]):
+            results[i]["snippet"] = _strip_html(s)
+
+    return {
+        "source": "web_search_duckduckgo",
+        "ok": len(results) > 0,
+        "status_code": resp.status_code,
+        "data": {
+            "query": q,
+            "results": results,
+            "provider": "duckduckgo",
+        },
+    }
+
+
+def _tavily_search(query: str) -> FetchResult:
+    """Tavily metered fallback, invoked only when no other source has data."""
+    if not settings.TAVILY_API_KEY:
+        return {
+            "source": "web_search_tavily",
+            "ok": False,
+            "error": "missing_api_key",
+            "message": "TAVILY_API_KEY is not set",
+        }
+    q = (query or "").strip()
+    if not q:
+        return {
+            "source": "web_search_tavily",
+            "ok": False,
+            "error": "missing_query",
+            "message": "Query is required",
+        }
+    payload = {
+        "api_key": settings.TAVILY_API_KEY,
+        "query": q,
+        "search_depth": "advanced",
+        "max_results": max(1, min(settings.TAVILY_MAX_RESULTS, 5)),
+    }
+    timeout = settings.LIVE_API_TIMEOUT_SECONDS
+    try:
+        resp = requests.post("https://api.tavily.com/search", json=payload, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.Timeout:
+        return {
+            "source": "web_search_tavily",
+            "ok": False,
+            "error": "timeout",
+            "message": f"Timed out after {timeout}s",
+        }
+    except requests.RequestException as exc:
+        return {
+            "source": "web_search_tavily",
+            "ok": False,
+            "error": "request_error",
+            "message": str(exc),
+        }
+    except ValueError as exc:
+        return {
+            "source": "web_search_tavily",
+            "ok": False,
+            "error": "invalid_json",
+            "message": str(exc),
+        }
+
+    rows = data.get("results") or []
+    normalized = [
+        {
+            "title": r.get("title") or "",
+            "url": r.get("url") or "",
+            "snippet": r.get("content") or "",
+            "score": r.get("score"),
+        }
+        for r in rows
+        if isinstance(r, dict)
+    ]
+    return {
+        "source": "web_search_tavily",
+        "ok": len(normalized) > 0,
+        "status_code": resp.status_code,
+        "data": {
+            "query": q,
+            "results": normalized,
+            "answer": data.get("answer"),
+            "provider": "tavily",
+        },
+    }
+
+
+def _is_search_related_query(query: str) -> bool:
+    q = _normalize_query(query)
+    if not q:
+        return False
+    if "?" in (query or ""):
+        return True
+    return any(h in q for h in _SEARCH_HINTS)
+
+
+def _is_realtime_query(query: str) -> bool:
+    q = _normalize_query(query)
+    if not q:
+        return False
+    return any(h in q for h in _REALTIME_QUERY_HINTS)
+
+
+def _web_result_count(payload: FetchResult | None) -> int:
+    if not isinstance(payload, dict):
+        return 0
+    if not payload.get("ok"):
+        return 0
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    rows = data.get("results") if isinstance(data.get("results"), list) else []
+    count = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        title = str(row.get("title") or "").strip()
+        snippet = str(row.get("snippet") or row.get("content") or "").strip()
+        url = str(row.get("url") or "").strip()
+        if title or snippet or url:
+            count += 1
+    return count
+
+
+def _is_commodity_query(query: str) -> bool:
+    q = _normalize_query(query)
+    return any(h in q for h in _COMMODITY_HINTS)
+
+
 def _all_sources() -> dict[str, Callable[[], FetchResult]]:
     return {
         "sports_cricket_events": _sports_events_today,
@@ -514,6 +891,7 @@ def _all_sources() -> dict[str, Callable[[], FetchResult]]:
         "rss_economic_times_markets": _rss_economic_times,
         "rss_moneycontrol_finance": _rss_moneycontrol,
         "rss_ndtv_india_news": _rss_ndtv,
+        # Query-bound web-search providers are injected in get_live_data.
     }
 
 
@@ -536,6 +914,9 @@ def _select_sources(query: str) -> dict[str, Callable[[], FetchResult]]:
     if any(token in q for token in ["stock", "share", "reliance", "finance", "market"]):
         selected.update({"finance_reliance_yahoo", "mutual_fund_master", "rss_economic_times_markets", "rss_moneycontrol_finance"})
         domain_selected = True
+    # Commodity price queries are typically better served by live web search.
+    if any(token in q for token in ["gold", "silver", "commodity", "bullion", "xau", "xag"]):
+        domain_selected = True
     if any(token in q for token in ["news", "headline", "technology", "business", "latest"]):
         selected.update(
             {
@@ -557,7 +938,8 @@ def _select_sources(query: str) -> dict[str, Callable[[], FetchResult]]:
     if any(token in q for token in ["mutual fund", "fund"]):
         selected.update({"mutual_fund_master", "thenewsapi_mutual_fund_search"})
         domain_selected = True
-    if any(token in q for token in ["india", "country"]):
+    # Country API is only for country-info queries, not generic "... in India".
+    if "country" in q and any(token in q for token in ["capital", "population", "currency", "flag", "continent", "language"]):
         selected.update({"country_india", "rss_ndtv_india_news"})
         domain_selected = True
 
@@ -580,11 +962,27 @@ def _select_sources(query: str) -> dict[str, Callable[[], FetchResult]]:
 def get_live_data(query: str) -> dict[str, Any]:
     """Fetch live data from real APIs and return normalized JSON payload."""
     selected = _select_sources(query)
+    realtime_query = _is_realtime_query(query)
 
     q = query.lower()
     topic = _topic_from_query(query)
-    if topic and any(token in q for token in ["news", "headline", "latest", "today", "current", "live", "war", "update", "topic", "iran", "usa"]):
+    if topic and (not _is_commodity_query(query)) and any(token in q for token in ["news", "headline", "latest", "today", "current", "live", "war", "update", "topic", "iran", "usa"]):
         selected["thenewsapi_topic_search"] = (lambda t=topic: _thenews_topic_search(t))
+
+    # Web-search: use DuckDuckGo broadly for search-style queries.
+    # This is unmetered and should be preferred over paid sources.
+    # For sports temporal asks (yesterday/last/result) build a date-specific query
+    # so DDG finds yesterday's actual match pages rather than generic result lists.
+    if _is_search_related_query(query) or realtime_query:
+        q_lower = query.lower()
+        if any(t in q_lower for t in ["ipl", "cricket", "match"]) and \
+           any(t in q_lower for t in ["yesterday", "last", "result", "score", "who won"]):
+            from datetime import datetime as _dt, timedelta as _td
+            _yesterday = (_dt.now() - _td(days=1)).strftime("%B %d %Y")
+            ddg_query: str = f"IPL match result {_yesterday} score highlights who won"
+        else:
+            ddg_query = query
+        selected["web_search_duckduckgo"] = (lambda qq=ddg_query: _duckduckgo_search(qq))
 
     # When weather is selected, swap the static Chennai fetcher for a query-aware
     # one that resolves the city named in the question (e.g. Visakhapatnam, Vizag).
@@ -608,14 +1006,38 @@ def get_live_data(query: str) -> dict[str, Any]:
 
     successful = [item for item in sources.values() if item.get("ok")]
     errors = [item for item in sources.values() if not item.get("ok")]
+    meaningful_success = [
+        item for name, item in sources.items()
+        if item.get("ok") and name not in {"ip_geo"}
+    ]
+
+    # Tavily is metered. Call it as a strict fallback when no meaningful source
+    # succeeded, OR for realtime queries when DuckDuckGo returned sparse/empty
+    # results (API shuffle for better factual coverage).
+    tavily_used = False
+    force_tavily_for_commodity = _is_commodity_query(query) and not ((sources.get("web_search_duckduckgo") or {}).get("ok"))
+    ddg_rows = _web_result_count(sources.get("web_search_duckduckgo"))
+    force_tavily_for_realtime = realtime_query and ddg_rows < 2
+    if len(meaningful_success) == 0 or force_tavily_for_commodity or force_tavily_for_realtime:
+        tavily_result = _tavily_search(query)
+        sources["web_search_tavily"] = tavily_result
+        tavily_used = True
+        successful = [item for item in sources.values() if item.get("ok")]
+        errors = [item for item in sources.values() if not item.get("ok")]
+        meaningful_success = [
+            item for name, item in sources.items()
+            if item.get("ok") and name not in {"ip_geo"}
+        ]
 
     return {
         "query": query,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source_count": len(sources),
         "success_count": len(successful),
+        "meaningful_success_count": len(meaningful_success),
         "error_count": len(errors),
-        "has_data": len(successful) > 0,
+        "has_data": len(meaningful_success) > 0,
+        "tavily_fallback_used": tavily_used,
         "sources": sources,
         "errors": errors,
     }
@@ -726,6 +1148,22 @@ def _fetch_intent(intent: str, query: str) -> dict[str, FetchResult]:
         topic = _topic_from_query(query)
         if topic:
             fetchers["thenewsapi_topic_search"] = (lambda t=topic: _thenews_topic_search(t))
+        # Primary web-search source for broad topic/news lookups.
+        fetchers["web_search_duckduckgo"] = (lambda q=query: _duckduckgo_search(q))
+
+    # For sports intent, include web search as primary source for temporal
+    # asks like "yesterday/last IPL result" where schedule endpoints often
+    # return only today's fixtures. Use a date-specific search query so DDG
+    # returns yesterday's actual match pages rather than generic results/schedules.
+    if intent == "sports":
+        q_low = _normalize_query(query)
+        if any(t in q_low for t in ["yesterday", "last", "result", "results", "score", "scores", "who won"]):
+            from datetime import datetime as _dt, timedelta as _td
+            _yesterday = (_dt.now() - _td(days=1)).strftime("%B %d %Y")
+            sports_search_q = f"IPL match result {_yesterday} score highlights who won"
+        else:
+            sports_search_q = query
+        fetchers["web_search_duckduckgo"] = (lambda sq=sports_search_q: _duckduckgo_search(sq))
 
     # For weather, swap the static Chennai fetcher for a query-aware one that
     # resolves the city mentioned in the user question (e.g. "Visakhapatnam").
@@ -749,6 +1187,13 @@ def _fetch_intent(intent: str, query: str) -> dict[str, FetchResult]:
                     "error": "unexpected_error",
                     "message": str(exc),
                 }
+
+    # Metered Tavily fallback only when this intent produced zero successes,
+    # OR for sports when DDG produced sparse rows for realtime asks.
+    ddg_rows = _web_result_count(results.get("web_search_duckduckgo"))
+    sports_ddg_sparse = intent == "sports" and _is_realtime_query(query) and ddg_rows < 2
+    if not any(isinstance(r, dict) and r.get("ok") for r in results.values()) or sports_ddg_sparse:
+        results["web_search_tavily"] = _tavily_search(query)
     return results
 
 

@@ -9,6 +9,11 @@ from app.core.config import settings
 from app.schemas.file import UploadedFileOut
 
 
+_BLOCKED_EXTENSIONS = {
+    ".exe", ".dll", ".msi", ".bat", ".cmd", ".com", ".scr", ".ps1", ".vbs", ".jar", ".app",
+}
+
+
 def _uploads_dir() -> Path:
     path = Path(settings.UPLOAD_DIR)
     path.mkdir(parents=True, exist_ok=True)
@@ -17,13 +22,24 @@ def _uploads_dir() -> Path:
 
 def _is_allowed_mime(content_type: str | None, filename: str | None) -> bool:
     ext = Path(filename or "").suffix.lower()
-    if ext and ext in settings.ALLOWED_UPLOAD_EXTENSIONS:
-        return True
+    if ext in _BLOCKED_EXTENSIONS:
+        return False
+
+    # If a file has an extension, it MUST be from the configured allow-list.
+    if ext:
+        return ext in settings.ALLOWED_UPLOAD_EXTENSIONS
+
+    # No extension: allow only explicitly whitelisted MIME types.
     if not content_type:
         return False
-    if content_type in settings.ALLOWED_UPLOAD_MIME_TYPES:
-        return True
-    return content_type.startswith("text/")
+    return content_type in settings.ALLOWED_UPLOAD_MIME_TYPES
+
+
+def _supported_extensions_text(limit: int = 20) -> str:
+    exts = sorted({e.lower() for e in settings.ALLOWED_UPLOAD_EXTENSIONS if e})
+    if len(exts) <= limit:
+        return ", ".join(exts)
+    return ", ".join(exts[:limit]) + ", ..."
 
 
 def _safe_extension(filename: str) -> str:
@@ -43,11 +59,16 @@ async def upload_files(files: list[UploadFile]) -> list[UploadedFileOut]:
 
     for file in files:
         if not _is_allowed_mime(file.content_type, file.filename):
+            ext = Path(file.filename or "").suffix.lower() or "(none)"
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": "invalid_file_type",
-                    "message": f"Unsupported file type: {file.content_type or 'unknown'}",
+                    "message": (
+                        f"Unsupported file type for '{file.filename or 'unknown'}' (extension: {ext}). "
+                        "Only supported document, code, table, image, and video transcript formats are allowed."
+                    ),
+                    "supported_extensions": _supported_extensions_text(),
                 },
             )
 

@@ -35,21 +35,35 @@ _LIVE_AUTO_KEYWORDS = frozenset([
     "bitcoin", "crypto", "ethereum", "nifty", "sensex",
     "stock price", "share price", "mutual fund", "nifty 50",
     # ── sports ──────────────────────────────────────────────────────────────
-    "cricket", "ipl", "live score", "match score",
+    "cricket", "ipl", "live score", "match score", "score", "scores", "result", "results", "yesterday match",
     # ── news compound phrases (specific) ────────────────────────────────────
-    "latest news", "today news", "breaking news", "headlines today",
+    "latest news", "today news", "yesterday news", "breaking news", "headlines today",
     "market today", "today headlines",
     # ── weather (always live context) ───────────────────────────────────────
     "weather", "weather forecast", "current weather", "temperature today",
     # ── geopolitical events ──────────────────────────────────────────────────
     "war", "conflict", "outbreak",
+    # ── commodities / broad web-search live asks ───────────────────────────
+    "gold", "silver", "commodity", "bullion", "xau", "xag",
+    "search", "latest updates", "what is happening",
+    "today", "yesterday", "latest", "current",
 ])
+
+_MEMORY_EXCHANGES = 10
+_MEMORY_MAX_MESSAGES = _MEMORY_EXCHANGES * 2
 
 
 ATTACHMENT_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+)\)")
 GSHEET_URL_RE = re.compile(r"https?://docs\.google\.com/spreadsheets/d/[^\s)]+")
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-TABULAR_SUFFIXES = {".xlsx", ".csv", ".tsv"}
+VIDEO_SUFFIXES = {".mp4", ".webm", ".mov"}
+TABULAR_SUFFIXES = {".xlsx", ".csv", ".tsv", ".json"}
+
+PLAIN_TEXT_SUFFIXES = {
+    ".txt", ".md", ".csv", ".tsv", ".json", ".py", ".ts", ".tsx", ".js", ".jsx",
+    ".html", ".xml", ".yaml", ".yml", ".sql", ".tex", ".java", ".c", ".cpp", ".cc",
+    ".cxx", ".cs", ".go", ".rs", ".php", ".rb", ".sh", ".r", ".kt", ".swift", ".srt", ".vtt",
+}
 
 
 def _uploaded_path_from_url(url: str) -> Path | None:
@@ -112,10 +126,73 @@ def _extract_text_from_file(path: Path) -> str:
                         rows.append("\t".join(values))
             return "\n".join(rows)
 
-    if suffix in {".txt", ".md", ".csv", ".json", ".py", ".ts", ".tsx", ".js", ".jsx", ".html", ".xml", ".yaml", ".yml"}:
+    if suffix == ".ipynb":
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+            cells = raw.get("cells") if isinstance(raw, dict) else []
+            chunks: list[str] = []
+            if isinstance(cells, list):
+                for cell in cells[:200]:
+                    if not isinstance(cell, dict):
+                        continue
+                    ctype = str(cell.get("cell_type") or "")
+                    src = cell.get("source")
+                    text = "".join(src) if isinstance(src, list) else str(src or "")
+                    text = text.strip()
+                    if not text:
+                        continue
+                    label = "Code" if ctype == "code" else "Markdown"
+                    chunks.append(f"{label} cell:\n{text}")
+            return "\n\n".join(chunks)
+        except Exception:
+            return path.read_text(encoding="utf-8", errors="ignore")
+
+    if suffix in PLAIN_TEXT_SUFFIXES:
         return path.read_text(encoding="utf-8", errors="ignore")
 
     return ""
+
+
+def _media_attachment_note(path: Path) -> str:
+    """Return a concise textual note for non-text attachments.
+
+    This enables the assistant to answer attachment-related questions even when
+    OCR/transcription is unavailable.
+    """
+    try:
+        size_kb = max(1, round(path.stat().st_size / 1024))
+    except Exception:
+        size_kb = 0
+    suffix = path.suffix.lower()
+    mime_type, _ = mimetypes.guess_type(path.name)
+    mime = mime_type or "application/octet-stream"
+
+    if suffix in IMAGE_SUFFIXES:
+        return f"Image attachment: {path.name} ({mime}, {size_kb}KB)."
+    if suffix in VIDEO_SUFFIXES:
+        return (
+            f"Video attachment: {path.name} ({mime}, {size_kb}KB). "
+            "Use this file context for user questions about the uploaded video."
+        )
+    return f"Attachment: {path.name} ({mime}, {size_kb}KB)."
+
+
+def _json_rows_for_table(text: str) -> list[dict[str, str]]:
+    """Convert JSON array/object payload into table-like rows when possible."""
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return []
+
+    rows: list[dict[str, str]] = []
+    if isinstance(parsed, list):
+        for item in parsed[:300]:
+            if isinstance(item, dict):
+                rows.append({str(k): str(v) for k, v in item.items()})
+    elif isinstance(parsed, dict):
+        # Single object as one-row table
+        rows.append({str(k): str(v) for k, v in parsed.items()})
+    return rows
 
 
 def _chunk_text(text: str, chunk_size: int = 1200, overlap: int = 200) -> list[str]:
@@ -144,6 +221,20 @@ def _attachment_entries(prompt: str) -> list[tuple[str, str, Path]]:
     return entries
 
 
+def _history_attachment_entries(history: list[dict[str, str]] | None) -> list[tuple[str, str, Path]]:
+    if not history:
+        return []
+    merged: list[tuple[str, str, Path]] = []
+    for msg in history:
+        if not isinstance(msg, dict):
+            continue
+        content = str(msg.get("content") or "")
+        if not content:
+            continue
+        merged.extend(_attachment_entries(content))
+    return merged
+
+
 def _image_data_url(path: Path) -> str | None:
     mime_type, _ = mimetypes.guess_type(path.name)
     if not mime_type or not mime_type.startswith("image/"):
@@ -152,15 +243,46 @@ def _image_data_url(path: Path) -> str | None:
     return f"data:{mime_type};base64,{encoded}"
 
 
-def _build_user_content(user_id: str, thread_id: str, prompt: str):
-    effective_prompt = _prompt_with_rag_context(user_id=user_id, thread_id=thread_id, prompt=prompt)
+def _build_user_content(
+    user_id: str,
+    thread_id: str,
+    prompt: str,
+    use_rag: bool = True,
+    history: list[dict[str, str]] | None = None,
+):
+    if not use_rag:
+        marker = "\n\nAttached files:\n"
+        # Frontend appends attachment links in this block. Remove it completely
+        # when RAG is OFF so no document hints leak into plain-chat mode.
+        if marker in prompt:
+            prompt = prompt.split(marker, 1)[0].strip()
+
+    effective_prompt = (
+        _prompt_with_rag_context(user_id=user_id, thread_id=thread_id, prompt=prompt)
+        if use_rag
+        else prompt
+    )
     image_urls: list[str] = []
+
+    # Current-turn attachment images.
     for _, _, path in _attachment_entries(prompt):
         if path.suffix.lower() not in IMAGE_SUFFIXES:
             continue
         data_url = _image_data_url(path)
         if data_url:
             image_urls.append(data_url)
+
+    # Follow-up turns: if the user asks about previously attached images,
+    # include recent image attachments from history so the model can answer.
+    if not image_urls:
+        for _, _, path in _history_attachment_entries(history):
+            if path.suffix.lower() not in IMAGE_SUFFIXES:
+                continue
+            data_url = _image_data_url(path)
+            if data_url and data_url not in image_urls:
+                image_urls.append(data_url)
+            if len(image_urls) >= 3:
+                break
 
     if not image_urls:
         return effective_prompt
@@ -234,7 +356,14 @@ def _tabular_sources_from_attachments(prompt: str) -> list[dict]:
             continue
         if not text.strip():
             continue
-        columns, rows = _rows_to_table(_text_to_rows(text))
+        if path.suffix.lower() == ".json":
+            json_rows = _json_rows_for_table(text)
+            if not json_rows:
+                continue
+            columns = list(json_rows[0].keys())
+            rows = json_rows
+        else:
+            columns, rows = _rows_to_table(_text_to_rows(text))
         if not columns or not rows:
             continue
         sources.append(
@@ -436,14 +565,19 @@ def _build_attachment_context(prompt: str) -> str:
             text = _extract_text_from_file(file_path).strip()
         except Exception:
             text = ""
-        if not text:
-            continue
-        trimmed = text[:12000]
-        snippets.append(
-            f"File: {name}\n"
-            f"Source: {url}\n"
-            f"Extracted content:\n{trimmed}"
-        )
+        if text:
+            trimmed = text[:12000]
+            snippets.append(
+                f"File: {name}\n"
+                f"Source: {url}\n"
+                f"Extracted content:\n{trimmed}"
+            )
+        else:
+            snippets.append(
+                f"File: {name}\n"
+                f"Source: {url}\n"
+                f"Attachment context: {_media_attachment_note(file_path)}"
+            )
 
     if not snippets:
         return ""
@@ -531,6 +665,57 @@ def _value_from_item(item, key: str):
     return getattr(item, key, None)
 
 
+def _bounded_history(history: list[dict[str, str]] | None, max_messages: int = _MEMORY_MAX_MESSAGES) -> list[dict[str, str]]:
+    if not history:
+        return []
+    filtered = [
+        {"role": str(m.get("role") or ""), "content": str(m.get("content") or "")}
+        for m in history
+        if isinstance(m, dict) and m.get("role") in {"user", "assistant"} and str(m.get("content") or "").strip()
+    ]
+    return filtered[-max_messages:]
+
+
+def _history_without_attachment_context(history: list[dict[str, str]] | None) -> list[dict[str, str]]:
+    """Drop turns that include uploaded-file references when RAG is disabled."""
+    if not history:
+        return []
+    cleaned: list[dict[str, str]] = []
+    for msg in history:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "")
+        content = str(msg.get("content") or "")
+        if not role or not content.strip():
+            continue
+        low = content.lower()
+        if "attached files:" in low:
+            continue
+        if ATTACHMENT_LINK_RE.search(content):
+            continue
+        if "/uploads/" in low:
+            continue
+        cleaned.append({"role": role, "content": content})
+    return cleaned
+
+
+def _is_memory_recall_query(question: str) -> bool:
+    q = (question or "").lower()
+    memory_patterns = (
+        "what is my name",
+        "what's my name",
+        "who am i",
+        "what is my company",
+        "where do i work",
+        "what did i say",
+        "do you remember",
+        "remember my",
+        "my name",
+        "my company",
+    )
+    return any(p in q for p in memory_patterns)
+
+
 def _generate_assistant_reply(
     *,
     client,
@@ -540,6 +725,7 @@ def _generate_assistant_reply(
     prompt: str,
     raw_prompt: str | None = None,
     mode: str | None = None,
+    use_rag: bool = True,
 ) -> str:
     """Generate assistant output for chat, image, or embedding models."""
     mtype = _model_type(llm_model)
@@ -547,11 +733,31 @@ def _generate_assistant_reply(
     if mtype == "chat":
         mode_lower = (mode or "").lower()
         question = raw_prompt if isinstance(raw_prompt, str) else (prompt if isinstance(prompt, str) else str(prompt))
+        bounded_history = _bounded_history(history)
+        if not use_rag:
+            bounded_history = _history_without_attachment_context(bounded_history)
+        has_attachments = bool(_attachment_entries(question)) or bool(_history_attachment_entries(bounded_history))
 
         # ── Live data mode ─────────────────────────────────────────────────────
         # Triggered when mode="live" OR the query contains a recognised live keyword.
-        auto_live = any(kw in question.lower() for kw in _LIVE_AUTO_KEYWORDS)
-        if mode_lower == "live" or auto_live:
+        lowered_question = question.lower()
+        auto_live = any(kw in lowered_question for kw in _LIVE_AUTO_KEYWORDS)
+        # Keep inline chat aligned with Live Agent behavior: if the query looks
+        # like a web-search/live-information ask, route through live-data APIs
+        # (DuckDuckGo primary, Tavily fallback) instead of plain model chat.
+        try:
+            auto_live = auto_live or api_service._is_search_related_query(question)
+        except Exception:
+            pass
+        # Attachment-related questions should use attachment/RAG context first,
+        # not live web-search routing.
+        if has_attachments:
+            auto_live = False
+        # Personal recall/follow-up queries should use conversation memory,
+        # not live web-search routing.
+        if _is_memory_recall_query(question):
+            auto_live = False
+        if mode_lower != "sql" and (mode_lower == "live" or auto_live):
             answer: str | None = None
 
             # Multi-intent path: detect 2+ categories → targeted per-category fetch
@@ -575,7 +781,11 @@ def _generate_assistant_reply(
                     multi_data = api_service.get_multi_intent_data(question)
                     if multi_data.get("success_count", 0) > 0:
                         answer = llm_service.ask_llm(
-                            question, multi_data, user_email=user_email, model=llm_model
+                            question,
+                            multi_data,
+                            user_email=user_email,
+                            model=llm_model,
+                            history=bounded_history,
                         )
             except Exception:
                 answer = None
@@ -587,7 +797,11 @@ def _generate_assistant_reply(
                     live_data = api_service.get_live_data(question)
                     if live_data.get("has_data"):
                         answer = llm_service.ask_llm(
-                            question, live_data, user_email=user_email, model=llm_model
+                            question,
+                            live_data,
+                            user_email=user_email,
+                            model=llm_model,
+                            history=bounded_history,
                         )
                 except Exception:
                     answer = None
@@ -604,13 +818,20 @@ def _generate_assistant_reply(
                     "i don't have access to real-time", "no data found",
                     "i'm unable to provide real-time", "i am unable to provide real-time",
                     "i cannot access real-time", "data not available right now.\n\n[",
+                    "i cannot provide the real-time", "i cannot provide real-time",
+                    "my knowledge cutoff", "as of my knowledge cutoff",
+                    "as of my last update", "i don't have the ability to access",
+                    "please check a live", "please visit",
                 )
                 return any(p in low for p in bad_phrases)
 
             if _is_unhelpful(answer):
                 try:
                     answer = llm_service.ask_llm_fallback(
-                        question, user_email=user_email, model=llm_model
+                        question,
+                        user_email=user_email,
+                        model=llm_model,
+                        history=bounded_history,
                     )
                 except Exception as exc:
                     answer = (
@@ -676,7 +897,7 @@ def _generate_assistant_reply(
                 }
             )
 
-        return generate_chart_or_text_response(client, llm_model, user_email, prompt, history=history)
+        return generate_chart_or_text_response(client, llm_model, user_email, prompt, history=bounded_history)
 
     if mtype == "image":
         # Some LiteLLM proxies register Imagen under a different alias than the
@@ -870,6 +1091,7 @@ async def send_message(
     content: str,
     model: str | None = None,
     mode: str | None = None,
+    use_rag: bool = True,
 ) -> tuple[ChatThread, ChatMessageRow, ChatMessageRow]:
     """Persist user message, call LLM with full history, persist assistant reply."""
     thread = await get_thread(db, user, thread_id)
@@ -879,6 +1101,9 @@ async def send_message(
 
     history = [{"role": m.role, "content": m.content} for m in thread.messages]
     history.append({"role": "user", "content": content})
+    # RAG OFF must behave like plain LLM chat with no document-memory bleed.
+    # Use a clean context for generation to avoid reusing earlier PDF-derived replies.
+    generation_history = history[:-1] if use_rag else []
 
     client = get_llm_client()
     llm_model = model or settings.LLM_MODEL
@@ -886,16 +1111,19 @@ async def send_message(
         user_id=str(user.id),
         thread_id=str(thread.id),
         prompt=content,
+        use_rag=use_rag,
+        history=generation_history,
     )
     try:
         reply = _generate_assistant_reply(
             client=client,
             llm_model=llm_model,
             user_email=user.email,
-            history=history[:-1],
+            history=generation_history,
             prompt=effective_prompt,
             raw_prompt=content,
             mode=mode,
+            use_rag=use_rag,
         )
     except Exception as exc:
         reply = (
@@ -921,6 +1149,7 @@ async def edit_message(
     new_content: str,
     model: str | None = None,
     mode: str | None = None,
+    use_rag: bool = True,
 ) -> ChatThread:
     """Edit a user message, delete all messages after it, and regenerate assistant responses."""
     thread = await get_thread(db, user, thread_id)
@@ -964,6 +1193,7 @@ async def edit_message(
         {"role": m.role, "content": m.content}
         for m in thread.messages[: msg_index + 1]
     ]
+    generation_history = history[:-1] if use_rag else []
 
     # Generate new assistant response
     client = get_llm_client()
@@ -972,16 +1202,19 @@ async def edit_message(
         user_id=str(user.id),
         thread_id=str(thread.id),
         prompt=new_content,
+        use_rag=use_rag,
+        history=generation_history,
     )
     try:
         reply = _generate_assistant_reply(
             client=client,
             llm_model=llm_model,
             user_email=user.email,
-            history=history[:-1],
+            history=generation_history,
             prompt=effective_prompt,
             raw_prompt=new_content,
             mode=mode,
+            use_rag=use_rag,
         )
     except Exception as exc:
         reply = (

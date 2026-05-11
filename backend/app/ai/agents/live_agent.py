@@ -39,6 +39,20 @@ from langchain_core.tools import tool
 
 from app.ai.llm import get_chat_llm
 from app.services import api_service
+from app.services import mcp_tools_service
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Per-request user-email context — `@tool` callables take only their declared
+# arguments, so we stash the authenticated email on a thread-local and read it
+# from the MCP-style tools (send_email / create_reminder / send_notification)
+# for audit-logging. Set in `build_agent_executor`.
+# ──────────────────────────────────────────────────────────────────────────────
+_current_user_email = threading.local()
+
+
+def _get_user_email() -> str | None:
+    return getattr(_current_user_email, "value", None)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -204,6 +218,19 @@ def get_news(topic: str = "") -> str:
     add(((sources.get("thenewsapi_top_india") or {}).get("data") or {}).get("data") or [], "TheNewsAPI India")
 
     if not bullets:
+        # Web-search fallback chain:
+        # 1) DuckDuckGo (preferred/unmetered)
+        # 2) Tavily (metered, only when DDG and all native sources are empty)
+        ddg = api_service._duckduckgo_search(topic_clean or "latest news")
+        ddg_items = ((ddg.get("data") or {}).get("results") or []) if ddg.get("ok") else []
+        add(ddg_items, "DuckDuckGo")
+
+    if not bullets:
+        tav = api_service._tavily_search(topic_clean or "latest news")
+        tav_items = ((tav.get("data") or {}).get("results") or []) if tav.get("ok") else []
+        add(tav_items, "Tavily")
+
+    if not bullets:
         return "ERROR: no news source returned data right now."
     header = f"Top headlines{(' for ' + topic_clean) if topic_clean else ''}:"
     return header + "\n" + "\n".join(bullets)
@@ -229,6 +256,76 @@ def get_sports(query: str = "") -> str:
     """
     _ = query  # accepted for ReAct symmetry
     lines: list[str] = []
+    q_low = (query or "").lower()
+    prioritize_web = any(token in q_low for token in ["yesterday", "last", "result", "results", "score", "scores", "ipl"])
+
+    def _append_web_updates(search_query: str) -> bool:
+        ddg = api_service._duckduckgo_search(search_query)
+        ddg_rows = ((ddg.get("data") or {}).get("results") or []) if ddg.get("ok") else []
+        if ddg_rows:
+            def _row_score(item: dict) -> int:
+                text = f"{item.get('title') or ''} {item.get('snippet') or item.get('content') or ''}".lower()
+                score = 0
+                if any(t in text for t in ["yesterday", "last match", "match result", "results", "who won", "highlights", "scorecard"]):
+                    score += 6
+                if any(t in text for t in ["today", "live score", "live cricket score"]):
+                    score -= 3
+                return score
+
+            ranked = [r for r in ddg_rows if isinstance(r, dict)]
+            if prioritize_web:
+                ranked.sort(key=_row_score, reverse=True)
+
+            lines.append("Live sports updates (DuckDuckGo):")
+            for item in ranked[:6]:
+                if not isinstance(item, dict):
+                    continue
+                title = (item.get("title") or "Match update").strip()
+                snippet = (item.get("snippet") or item.get("content") or "").strip()
+                url = (item.get("url") or "").strip()
+                line = f"- {title}"
+                if snippet:
+                    line += f": {snippet[:160]}"
+                if url:
+                    line += f" ({url})"
+                lines.append(line)
+            return True
+
+        tav = api_service._tavily_search(search_query)
+        tav_rows = ((tav.get("data") or {}).get("results") or []) if tav.get("ok") else []
+        if tav_rows:
+            def _row_score(item: dict) -> int:
+                text = f"{item.get('title') or ''} {item.get('snippet') or item.get('content') or ''}".lower()
+                score = 0
+                if any(t in text for t in ["yesterday", "last match", "match result", "results", "who won", "highlights", "scorecard"]):
+                    score += 6
+                if any(t in text for t in ["today", "live score", "live cricket score"]):
+                    score -= 3
+                return score
+
+            ranked = [r for r in tav_rows if isinstance(r, dict)]
+            if prioritize_web:
+                ranked.sort(key=_row_score, reverse=True)
+
+            lines.append("Live sports updates (Tavily):")
+            for item in ranked[:6]:
+                if not isinstance(item, dict):
+                    continue
+                title = (item.get("title") or "Match update").strip()
+                snippet = (item.get("snippet") or item.get("content") or "").strip()
+                url = (item.get("url") or "").strip()
+                line = f"- {title}"
+                if snippet:
+                    line += f": {snippet[:160]}"
+                if url:
+                    line += f" ({url})"
+                lines.append(line)
+            return True
+        return False
+
+    if prioritize_web:
+        if _append_web_updates((query or "yesterday IPL match results").strip()):
+            return "\n".join(lines)
 
     ev = api_service._sports_events_today()
     if ev.get("ok"):
@@ -265,6 +362,9 @@ def get_sports(query: str = "") -> str:
                 lines.append("")
             lines.append("Currently-live matches (CricAPI):")
             lines.extend(bullets)
+
+    if not lines:
+        _append_web_updates((query or "latest IPL cricket score today").strip())
 
     if not lines:
         return "ERROR: no sports data source returned data right now."
@@ -367,10 +467,384 @@ def get_mutual_fund(query: str = "") -> str:
     return "\n".join(lines)
 
 
+@tool("web_search", return_direct=False)
+def web_search(query: str) -> str:
+    """Search the web for any topic that domain tools do not cover.
+
+    Use this for commodity prices (gold/silver), geopolitics/war updates, and
+    any "latest" topic where dedicated APIs are empty. Provider chain:
+      1) DuckDuckGo first (preferred/unmetered)
+      2) Tavily fallback only when DuckDuckGo has no results
+
+    Args:
+        query: The natural-language search query.
+
+    Returns:
+        Up to 6 concise search results with title/snippet/link, or ERROR.
+    """
+    q = (query or "").strip()
+    if not q:
+        return "ERROR: query is required."
+
+    ddg = api_service._duckduckgo_search(q)
+    rows = ((ddg.get("data") or {}).get("results") or []) if ddg.get("ok") else []
+    provider = "DuckDuckGo"
+
+    if not rows:
+        tav = api_service._tavily_search(q)
+        rows = ((tav.get("data") or {}).get("results") or []) if tav.get("ok") else []
+        provider = "Tavily"
+
+    if not rows:
+        return "ERROR: no web-search results available right now."
+
+    lines = [f"Top results ({provider}):"]
+    for i, item in enumerate(rows[:6], start=1):
+        if not isinstance(item, dict):
+            continue
+        title = (item.get("title") or "Untitled").strip()
+        snippet = (item.get("snippet") or item.get("content") or "").strip()
+        url = (item.get("url") or "").strip()
+        lines.append(f"{i}. {title}")
+        if snippet:
+            lines.append(f"   {snippet[:180]}")
+        if url:
+            lines.append(f"   {url}")
+    return "\n".join(lines)
+
+
 # Module-level tool list so the executor (and any future tests) share one
 # source of truth. Kept intentionally focused — one tool per intent category
 # the inline chat already supports.
-TOOLS = [get_weather, get_crypto, get_news, get_sports, get_stocks, get_mutual_fund]
+TOOLS = [
+    get_weather,
+    get_crypto,
+    get_news,
+    get_sports,
+    get_stocks,
+    get_mutual_fund,
+    web_search,
+]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# MCP-style assistant tools — email, reminders, notifications.
+# Side-effecting tools live behind `mcp_tools_service` so the agent can be
+# unit-tested by mocking that module.
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@tool("send_email", return_direct=False)
+def send_email_tool(to: str, subject: str, body: str) -> str:
+    """Send an email via the Resend API. Supports MULTIPLE recipients.
+
+    Use this whenever the user asks you to email, mail, or message someone
+    over email — e.g. "email Ravi that the meeting is postponed", or
+    "send onboarding email to alice@x.com, bob@y.com".
+
+    If the user gives a NAME instead of an email address, FIRST call the
+    `lookup_users` tool to resolve it from the application database, then
+    pass the resulting address(es) here. Only ask the human if the lookup
+    returns no matches.
+
+    Args:
+        to: One or more recipient email addresses. Multiple addresses may be
+            comma-, semicolon-, or whitespace-separated
+            (e.g. "alice@x.com, bob@y.com").
+        subject: Short subject line.
+        body: Plain-text body of the email.
+
+    Returns:
+        A confirmation string with the Resend message id and the list of
+        recipients on success, or an explicit ERROR string on failure.
+    """
+    result = mcp_tools_service.send_email(
+        to=to, subject=subject, body=body, user_email=_get_user_email()
+    )
+    if result.get("ok"):
+        recipients = ", ".join(result["to"])
+        provider = result.get("provider", "?")
+        return f"Email sent via {provider} to {recipients} (id={result['id']}, subject={result['subject']!r})."
+    err = f"ERROR: send_email failed ({result.get('error')}: {result.get('message')})."
+    if result.get("hint"):
+        err += f" HINT: {result['hint']}"
+    return err
+
+
+@tool("lookup_users", return_direct=False)
+def lookup_users_tool(query: str = "") -> str:
+    """Find application users by partial name / email match — or list ALL users.
+
+    Use this whenever you need email addresses you don't already have:
+    * If the human references a person by NAME ("email Ravi…"), pass the
+      name fragment (case-insensitive substring on `full_name` and `email`).
+    * If the human asks to email "all users", "every user in the database",
+      "the team", or anything similarly broad, call this with an EMPTY
+      string (or "all" / "*") — you'll get every active user.
+    Then pass the resulting comma-separated addresses straight into
+    `send_email` or `send_welcome_email`. Do NOT ask the human for the
+    address list — the database is the source of truth.
+
+    Args:
+        query: Empty / "*" / "all" → list all active users (capped at 200).
+            Otherwise a name fragment or partial email.
+
+    Returns:
+        Multi-line string "<name> <email>" per match, or "No matches."
+    """
+    result = mcp_tools_service.lookup_users(query)
+    if not result.get("ok"):
+        return f"ERROR: lookup_users failed ({result.get('error')}: {result.get('message')})."
+    matches = result.get("matches") or []
+    if not matches:
+        return "No matches."
+    header = (
+        f"All active users ({len(matches)}):"
+        if result.get("listed_all")
+        else f"Found {len(matches)} user(s):"
+    )
+    lines = [header]
+    for m in matches:
+        name = m.get("name") or "(no name)"
+        lines.append(f"- {name} <{m['email']}>")
+    return "\n".join(lines)
+
+
+@tool("send_welcome_email", return_direct=False)
+def send_welcome_email_tool(to: str = "", everyone: bool = False) -> str:
+    """Send the styled HTML WELCOME / ONBOARDING email template.
+
+    Use this whenever the human asks for an onboarding, welcome, or
+    introduction email — NEVER hand-craft a plain-text onboarding email.
+    The template is a multi-section responsive HTML layout with logo,
+    hero image, feature grid, benefits list, and a CTA button. Each
+    recipient's first name is auto-filled from the users table.
+
+    Args:
+        to: Comma/semicolon-separated list of recipient EMAILS or NAMES.
+            Names are looked up against the users table automatically.
+            Leave empty ("") and set everyone=True to send to all users.
+        everyone: When True, send the welcome email to EVERY active user
+            in the database. Use this for prompts like "send the welcome
+            email to all users".
+
+    Returns:
+        Summary of how many sends succeeded / failed, with the failure
+        reason on each failed recipient.
+    """
+    result = mcp_tools_service.send_welcome_email(
+        to=to or None,
+        everyone=everyone,
+        user_email=_get_user_email(),
+    )
+    if not result.get("ok") and not result.get("sent"):
+        return f"ERROR: send_welcome_email failed ({result.get('error')}: {result.get('message')})."
+    parts = [
+        f"Welcome email sent to {result['sent_count']} recipient(s): {', '.join(result['sent'])}."
+    ]
+    if result.get("failed"):
+        parts.append(f"Failed for {result['failed_count']}:")
+        for f in result["failed"]:
+            parts.append(
+                f"- {f.get('email')}: {f.get('error')} — {f.get('message')}"
+            )
+    return "\n".join(parts)
+
+
+@tool("schedule_email", return_direct=False)
+def schedule_email_tool(to: str, subject: str, body: str, delay_seconds: int) -> str:
+    """Send a PLAIN-TEXT email AFTER a delay (in-process scheduler, max 24h).
+
+    Use this for plain-text follow-ups like "send a follow-up after 2 minutes".
+    For scheduled WELCOME / ONBOARDING follow-ups, use
+    `schedule_welcome_email` instead so the styled HTML template is preserved
+    — NEVER schedule a welcome follow-up through this tool, it will arrive
+    as plain text.
+
+    Args:
+        to: One or more recipient email addresses (comma/semicolon separated).
+        subject: Email subject line.
+        body: Plain-text body.
+        delay_seconds: How many seconds to wait. >= 1, capped at 86400 (24h).
+    """
+    result = mcp_tools_service.schedule_email(
+        to=to,
+        subject=subject,
+        body=body,
+        delay_seconds=delay_seconds,
+        user_email=_get_user_email(),
+    )
+    if result.get("ok"):
+        recipients = ", ".join(result["to"])
+        return (
+            f"Scheduled plain-text email to {recipients} in {result['delay_seconds']}s "
+            f"(job_id={result['job_id']})."
+        )
+    return f"ERROR: schedule_email failed ({result.get('error')}: {result.get('message')})."
+
+
+@tool("schedule_welcome_email", return_direct=False)
+def schedule_welcome_email_tool(
+    to: str = "", everyone: bool = False, delay_seconds: int = 120
+) -> str:
+    """Schedule the styled HTML FOLLOW-UP onboarding email after a delay.
+
+    This always uses the FOLLOW-UP variant (different subject + copy from the
+    welcome email) so a recipient never receives two identical messages. For
+    a smarter "only nudge people who didn't open the welcome" workflow, use
+    `send_welcome_with_followup` instead — it sends the welcome NOW and
+    schedules the follow-up only to non-openers via the Brevo events API.
+
+    Args:
+        to: Comma/semicolon-separated emails or names. Empty when
+            `everyone=True`.
+        everyone: When True, schedules the follow-up to every active user.
+        delay_seconds: Wait time in seconds (default 120 = 2 minutes).
+    """
+    result = mcp_tools_service.schedule_welcome_email(
+        to=to or None,
+        everyone=everyone,
+        delay_seconds=delay_seconds,
+        variant="followup",
+        user_email=_get_user_email(),
+    )
+    if not result.get("ok"):
+        return f"ERROR: schedule_welcome_email failed ({result.get('error')}: {result.get('message')})."
+    target = "everyone" if result.get("everyone") else ", ".join(result.get("to") or [])
+    return (
+        f"Scheduled HTML follow-up email to {target} in {result['delay_seconds']}s "
+        f"(job_id={result['job_id']})."
+    )
+
+
+@tool("send_welcome_with_followup", return_direct=False)
+def send_welcome_with_followup_tool(
+    to: str = "",
+    everyone: bool = False,
+    followup_delay_seconds: int = 120,
+) -> str:
+    """Send the WELCOME email now AND a FOLLOW-UP only to recipients who don't open it.
+
+    Use this whenever the user says things like "send the welcome email now
+    and a follow-up after 2 minutes" or "send the welcome and remind users
+    who don't open it". One call covers the whole flow:
+      1. Render and send the WELCOME template (different subject/body).
+      2. After ``followup_delay_seconds`` seconds, query Brevo's transactional
+         events API per recipient (https://app.brevo.com/transactional/email/real-time)
+         and send the FOLLOW-UP template only to recipients with no "opened"
+         event. Recipients that opened the welcome are skipped.
+
+    Requires Brevo as the active provider (BREVO_API_KEY set). With Resend the
+    open-tracking step is skipped and the follow-up is sent to everyone.
+
+    Args:
+        to: Comma/semicolon-separated emails or names. Empty when
+            `everyone=True`.
+        everyone: When True, run for every active user in the database.
+        followup_delay_seconds: Seconds to wait before checking opens and
+            sending the follow-up (default 120 = 2 minutes; max 86400).
+    """
+    initial = mcp_tools_service.send_welcome_email(
+        to=to or None,
+        everyone=everyone,
+        variant="welcome",
+        user_email=_get_user_email(),
+    )
+    if not initial.get("ok") and not initial.get("sent"):
+        return (
+            f"ERROR: welcome send failed ({initial.get('error')}: {initial.get('message')}). "
+            "Follow-up was NOT scheduled."
+        )
+
+    sent_emails = initial.get("sent") or []
+    message_ids = initial.get("message_ids") or {}
+    parts = [
+        f"Welcome (HTML) email sent to {len(sent_emails)} recipient(s): {', '.join(sent_emails)}."
+    ]
+    if initial.get("failed"):
+        parts.append(f"Welcome failed for {initial['failed_count']}:")
+        for f in initial["failed"]:
+            parts.append(f"- {f.get('email')}: {f.get('error')} — {f.get('message')}")
+
+    if message_ids:
+        followup = mcp_tools_service.schedule_followup_if_unopened(
+            message_ids=message_ids,
+            delay_seconds=followup_delay_seconds,
+            user_email=_get_user_email(),
+        )
+        if followup.get("ok"):
+            parts.append(
+                f"Follow-up will fire in {followup['delay_seconds']}s; only "
+                f"recipients who haven't opened the welcome will receive it "
+                f"(job_id={followup['job_id']})."
+            )
+        else:
+            parts.append(
+                f"Follow-up could NOT be scheduled: {followup.get('error')} — {followup.get('message')}."
+            )
+    else:
+        parts.append(
+            "No provider message ids returned for the welcome send, so an "
+            "opens-conditional follow-up could not be scheduled."
+        )
+    return "\n".join(parts)
+
+
+@tool("create_reminder", return_direct=False)
+def create_reminder_tool(task: str, time: str) -> str:
+    """Create a reminder for the current user.
+
+    Use this whenever the user asks to be reminded of something — e.g.
+    "remind me to call mom at 7 PM", "set a reminder for tomorrow 9 AM to
+    submit the report". The natural-language time is stored verbatim.
+
+    Args:
+        task: What to be reminded about (e.g. "call mom").
+        time: Natural-language time (e.g. "7 PM today", "tomorrow at 9 AM").
+
+    Returns:
+        A short confirmation string on success, or an ERROR string on failure.
+    """
+    result = mcp_tools_service.create_reminder(
+        task=task, time=time, user_email=_get_user_email()
+    )
+    if result.get("ok"):
+        return f"Reminder created: {result['task']!r} at {result['time']!r} (id={result['id']})."
+    return f"ERROR: create_reminder failed ({result.get('error')}: {result.get('message')})."
+
+
+@tool("send_notification", return_direct=False)
+def send_notification_tool(message: str) -> str:
+    """Push an in-app notification to the current user.
+
+    Use this whenever the user asks to be notified, alerted, or pinged about
+    something — e.g. "notify me when the task is completed", "send me a
+    notification: build finished".
+
+    Args:
+        message: The notification body to deliver.
+
+    Returns:
+        A short confirmation string on success, or an ERROR string on failure.
+    """
+    result = mcp_tools_service.send_notification(
+        message=message, user_email=_get_user_email()
+    )
+    if result.get("ok"):
+        return f"Notification queued: {result['message']!r} (id={result['id']})."
+    return f"ERROR: send_notification failed ({result.get('error')}: {result.get('message')})."
+
+
+TOOLS.extend([
+    send_email_tool,
+    create_reminder_tool,
+    send_notification_tool,
+    lookup_users_tool,
+    schedule_email_tool,
+    send_welcome_email_tool,
+    schedule_welcome_email_tool,
+    send_welcome_with_followup_tool,
+])
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -422,9 +896,14 @@ class _QueueCallbackHandler(BaseCallbackHandler):
 
     def on_tool_end(self, output: str, **_: Any) -> None:
         text = output if isinstance(output, str) else str(output)
+        max_len = 12000
         self._queue.put(StreamingAgentEvent(
             "tool_end",
-            {"output": text[:600], "truncated": len(text) > 600},
+            {
+                "output": text[:max_len],
+                "observation": text[:max_len],
+                "truncated": len(text) > max_len,
+            },
         ))
 
     def on_tool_error(self, error: BaseException, **_: Any) -> None:
@@ -462,6 +941,10 @@ def build_agent_executor(
     A fresh executor is built per request because the agent embeds the
     callbacks and per-user metadata. The LLM client itself is cached.
     """
+    # Make the authenticated email visible to side-effecting tools
+    # (send_email / create_reminder / send_notification) for audit logging.
+    _current_user_email.value = user_email
+
     base_llm = get_chat_llm()
     # Bind per-user tracking metadata so LiteLLM cost reports carry the email.
     llm = base_llm.bind(
@@ -472,11 +955,15 @@ def build_agent_executor(
     return initialize_agent(
         tools=TOOLS,
         llm=llm,
-        agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+        # STRUCTURED_CHAT supports multi-argument tools (send_email needs to,
+        # subject, body). The plain ZERO_SHOT_REACT_DESCRIPTION agent rejects
+        # any tool whose schema has more than one input field with:
+        #   "ZeroShotAgent does not support multi-input tool send_email."
+        agent=AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION,
         verbose=verbose,
         handle_parsing_errors=True,
         max_iterations=8,
-        early_stopping_method="generate",
+        early_stopping_method="force",
         return_intermediate_steps=True,
         callbacks=callbacks or [],
     )

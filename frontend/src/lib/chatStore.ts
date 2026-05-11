@@ -6,6 +6,11 @@ import { useSettingsStore } from "./settingsStore";
 // Persisted across reloads so the user lands back on the thread they had open.
 const ACTIVE_THREAD_KEY = "chat.activeThreadId";
 
+// Guard against out-of-order async updates (thread loads / selections)
+// that can transiently wipe messages in dev StrictMode or slow networks.
+let loadThreadsInFlight: Promise<void> | null = null;
+let selectThreadRequestSeq = 0;
+
 function readPersistedActiveId(): string | null {
   try {
     return typeof window !== "undefined"
@@ -37,7 +42,13 @@ interface ChatState {
   createThread: () => Promise<string>;
   deleteThread: (id: string) => Promise<void>;
   renameThread: (id: string, title: string) => Promise<void>;
-  sendMessage: (content: string, attachments?: File[], mode?: ChatMode) => Promise<void>;
+  sendMessage: (
+    content: string,
+    attachments?: File[],
+    mode?: ChatMode,
+    modelOverride?: string,
+    useRag?: boolean
+  ) => Promise<void>;
   editMessage: (messageId: string, newContent: string) => Promise<void>;
   reset: () => void;
 }
@@ -49,30 +60,53 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loading: false,
 
   loadThreads: async () => {
-    const threads = await api.listThreads();
-    set({ threads });
-    // Auto-select a thread on first load / page refresh so the user is
-    // never dropped onto an empty Hero state when they have existing chats.
-    const { activeId } = get();
-    if (activeId) return;
-    const persisted = readPersistedActiveId();
-    const restoreId =
-      (persisted && threads.some((t) => t.id === persisted) ? persisted : null) ??
-      threads[0]?.id ??
-      null;
-    if (restoreId) {
-      await get().selectThread(restoreId);
+    if (loadThreadsInFlight) {
+      await loadThreadsInFlight;
+      return;
+    }
+
+    loadThreadsInFlight = (async () => {
+      const threads = await api.listThreads();
+      set({ threads });
+
+      // Auto-select a thread on first load / page refresh so the user is
+      // never dropped onto an empty Hero state when they have existing chats.
+      const { activeId } = get();
+      if (activeId && threads.some((t) => t.id === activeId)) return;
+
+      const persisted = readPersistedActiveId();
+      const restoreId =
+        (persisted && threads.some((t) => t.id === persisted) ? persisted : null) ??
+        threads[0]?.id ??
+        null;
+      if (restoreId) {
+        await get().selectThread(restoreId);
+      }
+    })();
+
+    try {
+      await loadThreadsInFlight;
+    } finally {
+      loadThreadsInFlight = null;
     }
   },
 
   selectThread: async (id: string) => {
+    const reqId = ++selectThreadRequestSeq;
     set({ activeId: id, loading: true });
     writePersistedActiveId(id);
     try {
       const detail = await api.getThread(id);
-      set({ messages: detail.messages, loading: false });
+      // Ignore stale responses from older select-thread calls.
+      if (reqId !== selectThreadRequestSeq) return;
+      set((s) => {
+        if (s.activeId !== id) return { loading: false };
+        return { messages: detail.messages, loading: false };
+      });
     } catch {
-      set({ messages: [], loading: false });
+      // Keep existing messages on transient fetch errors; they can be reloaded.
+      if (reqId !== selectThreadRequestSeq) return;
+      set({ loading: false });
     }
   },
 
@@ -104,11 +138,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }));
   },
 
-  sendMessage: async (content: string, attachments: File[] = [], mode: ChatMode = "chat") => {
+  sendMessage: async (
+    content: string,
+    attachments: File[] = [],
+    mode: ChatMode = "chat",
+    modelOverride?: string,
+    useRag = true
+  ) => {
     let { activeId } = get();
     if (!activeId) {
       activeId = await get().createThread();
     }
+    const targetThreadId = activeId;
 
     let composedContent = content;
     if (attachments.length > 0) {
@@ -130,11 +171,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((s) => ({ messages: [...s.messages, userMsg], loading: true }));
 
     try {
-      const model = useSettingsStore.getState().selectedModel;
-      const detail = await api.sendMessage(activeId!, composedContent, model, mode);
-      // Update messages from server (has assistant response + correct IDs)
+      const model = modelOverride || useSettingsStore.getState().selectedModel;
+      const detail = await api.sendMessage(targetThreadId, composedContent, model, mode, useRag);
+      // Update thread metadata always; only replace messages when still viewing
+      // the same thread to avoid out-of-order UI clobbering.
       set((s) => ({
-        messages: detail.messages,
+        messages: s.activeId === detail.id ? detail.messages : s.messages,
         loading: false,
         // Update thread title (auto-generated on first message)
         threads: s.threads.map((t) =>
@@ -146,7 +188,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // so leaving it in the UI would let the user "edit" a phantom message
       // by id, producing a 404 "Message not found" on the PATCH endpoint.
       set((s) => ({
-        messages: s.messages.filter((m) => m.id !== userMsg.id),
+        messages: s.activeId === targetThreadId ? s.messages.filter((m) => m.id !== userMsg.id) : s.messages,
         loading: false,
       }));
       throw e;

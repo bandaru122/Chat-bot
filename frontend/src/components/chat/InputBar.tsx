@@ -1,5 +1,5 @@
-﻿import { ArrowUp, Paperclip, Square, X } from "lucide-react";
-import { useEffect, useRef } from "react";
+﻿import { ArrowUp, ImagePlus, Paperclip, Square, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 interface Props {
   value: string;
@@ -9,6 +9,26 @@ interface Props {
   onChange: (v: string) => void;
   onFilesChange: (files: File[]) => void;
   onSend: () => void;
+  imageGenerateEnabled?: boolean;
+  onToggleImageGenerate?: () => void;
+  onValidationError?: (message: string | null) => void;
+}
+
+const ALLOWED_ATTACHMENT_EXTENSIONS = new Set([
+  ".txt", ".md", ".csv", ".tsv", ".pdf", ".json", ".ipynb", ".doc", ".docx", ".xlsx", ".xls",
+  ".html", ".xml", ".yaml", ".yml", ".tex", ".sql", ".py", ".js", ".jsx", ".ts", ".tsx", ".java",
+  ".c", ".cpp", ".cs", ".go", ".rs", ".php", ".rb", ".sh", ".srt", ".vtt", ".png", ".jpg", ".jpeg",
+  ".webp", ".gif", ".mp4", ".webm", ".mov",
+]);
+
+const BLOCKED_ATTACHMENT_EXTENSIONS = new Set([
+  ".exe", ".dll", ".msi", ".bat", ".cmd", ".com", ".scr", ".ps1", ".vbs", ".jar", ".app",
+]);
+
+function extensionOf(name: string): string {
+  const idx = name.lastIndexOf(".");
+  if (idx < 0) return "";
+  return name.slice(idx).toLowerCase();
 }
 
 export default function InputBar({
@@ -19,9 +39,13 @@ export default function InputBar({
   onChange,
   onFilesChange,
   onSend,
+  imageGenerateEnabled = false,
+  onToggleImageGenerate,
+  onValidationError,
 }: Props) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [localValidationError, setLocalValidationError] = useState<string | null>(null);
 
   useEffect(() => {
     const el = ref.current;
@@ -40,7 +64,32 @@ export default function InputBar({
   const onFilePicked = (event: React.ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(event.target.files ?? []);
     if (selected.length === 0) return;
-    onFilesChange([...files, ...selected]);
+
+    const accepted: File[] = [];
+    const rejectedNames: string[] = [];
+    for (const f of selected) {
+      const ext = extensionOf(f.name);
+      if (!ext || BLOCKED_ATTACHMENT_EXTENSIONS.has(ext) || !ALLOWED_ATTACHMENT_EXTENSIONS.has(ext)) {
+        rejectedNames.push(f.name);
+        continue;
+      }
+      accepted.push(f);
+    }
+
+    if (rejectedNames.length > 0) {
+      const shown = rejectedNames.slice(0, 3).join(", ");
+      const suffix = rejectedNames.length > 3 ? ` and ${rejectedNames.length - 3} more` : "";
+      const msg = `File is not supported: ${shown}${suffix}. Please upload a supported format.`;
+      setLocalValidationError(msg);
+      onValidationError?.(msg);
+    } else {
+      setLocalValidationError(null);
+      onValidationError?.(null);
+    }
+
+    if (accepted.length > 0) {
+      onFilesChange([...files, ...accepted]);
+    }
     event.target.value = "";
   };
 
@@ -57,7 +106,7 @@ export default function InputBar({
           multiple
           className="hidden"
           onChange={onFilePicked}
-          accept=".txt,.md,.csv,.pdf,.json,.doc,.docx,.xlsx,.xls,.html,.xml,.yaml,.yml,.py,.js,.jsx,.ts,.tsx,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm,.mov"
+          accept=".txt,.md,.csv,.tsv,.pdf,.json,.ipynb,.doc,.docx,.xlsx,.xls,.html,.xml,.yaml,.yml,.tex,.sql,.py,.js,.jsx,.ts,.tsx,.java,.c,.cpp,.cs,.go,.rs,.php,.rb,.sh,.srt,.vtt,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm,.mov"
         />
         {files.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2 px-1 pt-1">
@@ -80,6 +129,9 @@ export default function InputBar({
             ))}
           </div>
         )}
+        {localValidationError && (
+          <div className="mb-2 px-1 text-xs text-red-300">{localValidationError}</div>
+        )}
         <div className="flex items-end gap-2">
           <button
             type="button"
@@ -89,20 +141,36 @@ export default function InputBar({
           >
             <Paperclip className="h-4 w-4" />
           </button>
+          <button
+            type="button"
+            onClick={onToggleImageGenerate}
+            title="Generate image from prompt"
+            className={
+              "mb-1 flex h-9 w-9 items-center justify-center rounded-lg transition " +
+              (imageGenerateEnabled
+                ? "bg-fuchsia-500/20 text-fuchsia-300 ring-1 ring-fuchsia-400/40"
+                : "text-slate-400 hover:bg-white/5 hover:text-slate-200")
+            }
+          >
+            <ImagePlus className="h-4 w-4" />
+          </button>
           <textarea
             ref={ref}
             value={value}
             onChange={(e) => onChange(e.target.value)}
             onKeyDown={onKey}
             rows={1}
-            placeholder={placeholder ?? "Message AIâ€¦"}
+            placeholder={
+              placeholder ??
+              (imageGenerateEnabled ? "Describe the image you want to generate..." : "Message AI...")
+            }
             className="max-h-56 min-h-[2.25rem] flex-1 resize-none bg-transparent px-1 py-2 text-[15px] text-slate-100 placeholder:text-slate-500 focus:outline-none"
           />
           <button
             onClick={onSend}
             disabled={busy || (!value.trim() && files.length === 0)}
             className="mb-1 flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white shadow-lg shadow-violet-500/30 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none disabled:brightness-75"
-            title={busy ? "Generatingâ€¦" : "Send (Enter)"}
+            title={busy ? "Generating..." : imageGenerateEnabled ? "Generate image" : "Send (Enter)"}
           >
             {busy ? (
               <Square className="h-3.5 w-3.5 fill-white" />

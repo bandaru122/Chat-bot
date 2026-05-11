@@ -107,10 +107,6 @@ function extractVideoUrls(content: string): string[] {
   return [...unique];
 }
 
-function isImageUrl(url: string) {
-  return /\.(png|jpe?g|gif|webp|svg)(\?|#|$)/i.test(url) || url.startsWith("data:image/");
-}
-
 function isVideoUrl(url: string) {
   return /\.(mp4|webm|ogg|mov|m4v)(\?|#|$)/i.test(url) || url.startsWith("data:video/");
 }
@@ -324,17 +320,6 @@ function Bubble({
               },
               a({ href, children }) {
                 if (!href) return <>{children}</>;
-
-                if (href && isImageUrl(href)) {
-                  return (
-                    <img
-                      src={href}
-                      alt={typeof children === "string" ? children : "Linked image"}
-                      className="block w-full max-w-lg h-auto rounded-lg my-2 shadow-lg"
-                      style={{ maxWidth: "100%", maxHeight: "500px", objectFit: "contain" }}
-                    />
-                  );
-                }
 
                 return (
                   <a

@@ -40,6 +40,8 @@ For text:
 
 Guidelines:
 - Use realistic sample data if real data is not available.
+- If attachment context (files/images) is present in the user input, use it directly.
+- Do not say you are unable to view/interpret images when image context is provided.
 - Keep output simple and valid JSON.
 - Do not output markdown, backticks, or explanation text outside JSON.
 - If unsure, return type=text.

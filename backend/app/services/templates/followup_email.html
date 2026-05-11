@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>{{Subject}}</title>
+</head>
+<body style="margin:0; padding:0; font-family: Arial, sans-serif; background-color:#f4f6f8;">
+  <table width="100%" bgcolor="#f4f6f8" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center">
+        <table width="600" bgcolor="#ffffff" cellpadding="0" cellspacing="0" style="margin:20px; border-radius:10px; overflow:hidden;">
+
+          <!-- Header -->
+          <tr>
+            <td align="center" style="background:linear-gradient(90deg,#0ea5e9,#6366f1); padding:24px;">
+              <img src="{{LogoUrl}}" alt="{{AppName}}" height="40" style="display:block; max-height:40px;">
+            </td>
+          </tr>
+
+          <!-- Headline -->
+          <tr>
+            <td style="padding:28px 30px 8px;">
+              <h2 style="margin:0; color:#0f172a;">Hi {{UserName}}, did you get a chance to try {{AppName}}?</h2>
+            </td>
+          </tr>
+
+          <!-- Intro -->
+          <tr>
+            <td style="padding:8px 30px 0;">
+              <p style="color:#475569; font-size:14px; line-height:1.6; margin:0;">
+                A few days ago we sent you a quick welcome to {{AppName}}. We noticed you
+                haven’t opened it yet, so here’s the short version — straight to the point.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Compact value props -->
+          <tr>
+            <td style="padding:18px 30px 0;">
+              <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0; border-radius:8px;">
+                <tr>
+                  <td style="padding:14px 16px; border-bottom:1px solid #e2e8f0;">
+                    <p style="margin:0; font-size:13px; color:#0f172a;"><b>1 chat window, every workflow.</b><br>
+                    <span style="color:#475569;">Send emails, set reminders, query databases, and run RAG over your docs without leaving chat.</span></p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:14px 16px; border-bottom:1px solid #e2e8f0;">
+                    <p style="margin:0; font-size:13px; color:#0f172a;"><b>Plain English, real answers.</b><br>
+                    <span style="color:#475569;">Ask anything — the agent picks the right tool automatically.</span></p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:14px 16px;">
+                    <p style="margin:0; font-size:13px; color:#0f172a;"><b>Built for your team.</b><br>
+                    <span style="color:#475569;">Threads stay private to you; admins can audit every action.</span></p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- CTA -->
+          <tr>
+            <td align="center" style="padding:24px 20px 8px;">
+              <a href="{{AppLink}}" style="background:#6366f1; color:#ffffff; padding:12px 28px; text-decoration:none; border-radius:6px; font-size:14px; display:inline-block;">
+                Take 60 seconds to try it →
+              </a>
+            </td>
+          </tr>
+
+          <!-- Sign-off -->
+          <tr>
+            <td style="padding:12px 30px 28px;">
+              <p style="color:#475569; font-size:13px; line-height:1.6; margin:0;">
+                If you’d rather we stop nudging, just hit reply with “unsubscribe” and we’ll take you off this onboarding sequence.
+              </p>
+              <p style="color:#475569; font-size:13px; line-height:1.6; margin:18px 0 0;">
+                — The {{CompanyName}} team
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background:#f9fafb; padding:18px; text-align:center; font-size:12px; color:#6b7280;">
+              You received this because you didn’t open our welcome email.<br>
+              © 2026 {{CompanyName}}. All rights reserved.
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

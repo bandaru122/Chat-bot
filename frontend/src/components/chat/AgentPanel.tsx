@@ -62,6 +62,16 @@ export function AgentPanel({ open, onClose }: Props) {
     setError(null);
   };
 
+  // Each panel open starts a fresh session. This avoids showing stale events
+  // and previous answers when the user clicks Live Agent from a new chat.
+  useEffect(() => {
+    if (!open) return;
+    abortRef.current?.abort();
+    setBusy(false);
+    setQuery("");
+    reset();
+  }, [open]);
+
   const run = useCallback(async () => {
     const q = query.trim();
     if (!q || busy) return;
@@ -116,7 +126,7 @@ export function AgentPanel({ open, onClose }: Props) {
           <div>
             <div className="text-sm font-semibold text-white">Live Agent</div>
             <div className="text-xs text-slate-400">
-              ReAct agent — picks tools automatically: weather · crypto · news · sports · stocks · mutual fund
+              Ask agent to perform any task.
             </div>
           </div>
           <button
@@ -138,7 +148,7 @@ export function AgentPanel({ open, onClose }: Props) {
                 void run();
               }
             }}
-            placeholder="e.g. Bitcoin price AND weather in Mumbai AND top headlines"
+            placeholder="Ask anything to Agent"
             rows={2}
             className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-accent-400/50 focus:outline-none"
             disabled={busy}
@@ -256,14 +266,14 @@ function EventCard({ ev }: { ev: AgentEvent }) {
     );
   }
   if (ev.type === "tool_end") {
-    const obs = String(ev.data.observation ?? "");
+    const obs = String(ev.data.observation ?? ev.data.output ?? "");
     return (
       <div className="rounded border border-white/10 bg-white/5 px-3 py-2">
         <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
           Observation · {String(ev.data.tool ?? "")}
         </div>
         <div className="mt-1 whitespace-pre-wrap text-xs text-slate-300">
-          {obs.length > 600 ? obs.slice(0, 600) + "…" : obs}
+          {obs}
         </div>
       </div>
     );

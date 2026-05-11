@@ -56,3 +56,4 @@ class SendMessageRequest(BaseModel):
     content: str
     model: str | None = None
     mode: str | None = None
+    use_rag: bool = True

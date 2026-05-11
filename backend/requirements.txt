@@ -15,6 +15,7 @@ greenlet==3.1.1
 openai==1.59.6
 httpx==0.28.1
 requests==2.32.3
+duckduckgo_search==6.3.7
 langchain==0.3.13
 langchain-openai==0.2.14
 langchain-community==0.3.13

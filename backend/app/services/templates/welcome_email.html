@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Welcome to {{AppName}}</title>
+</head>
+<body style="margin:0; padding:0; font-family: Arial, sans-serif; background-color:#f4f6f8;">
+  <table width="100%" bgcolor="#f4f6f8" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center">
+
+        <!-- Main Container -->
+        <table width="600" bgcolor="#ffffff" cellpadding="0" cellspacing="0" style="margin:20px; border-radius:10px; overflow:hidden;">
+
+          <!-- Header with Logo -->
+          <tr>
+            <td align="center" style="background:linear-gradient(90deg,#4f46e5,#9333ea); padding:24px;">
+              <img src="{{LogoUrl}}" alt="{{AppName}}" height="40" style="display:block; max-height:40px;">
+            </td>
+          </tr>
+
+          <!-- Hero Section -->
+          <tr>
+            <td align="center">
+              <img src="{{HeroUrl}}" alt="Welcome to {{AppName}}" width="100%" style="display:block;">
+            </td>
+          </tr>
+
+          <!-- Welcome Text -->
+          <tr>
+            <td style="padding:30px;">
+              <h2 style="margin:0 0 12px; color:#111827;">Welcome, {{UserName}} 👋</h2>
+              <p style="color:#4b5563; font-size:14px; line-height:1.6; margin:0;">
+                {{IntroText}}
+              </p>
+            </td>
+          </tr>
+
+          <!-- Features Section -->
+          <tr>
+            <td style="padding:0 30px;">
+              <h3 style="color:#111827; margin:0 0 8px;">✨ What You Can Do</h3>
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td width="50%" style="padding:10px; vertical-align:top;">
+                    <p style="font-size:13px; color:#374151; margin:0;"><b>💬 Smart Conversations</b><br>Ask anything in natural language and get instant answers.</p>
+                  </td>
+                  <td width="50%" style="padding:10px; vertical-align:top;">
+                    <p style="font-size:13px; color:#374151; margin:0;"><b>⚙️ Task Automation</b><br>Send emails, set reminders, push notifications — all from chat.</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td width="50%" style="padding:10px; vertical-align:top;">
+                    <p style="font-size:13px; color:#374151; margin:0;"><b>📊 Data Insights</b><br>Query your databases and spreadsheets in plain English.</p>
+                  </td>
+                  <td width="50%" style="padding:10px; vertical-align:top;">
+                    <p style="font-size:13px; color:#374151; margin:0;"><b>🕒 24/7 Availability</b><br>Your AI assistant is always ready when you are.</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Benefits Section -->
+          <tr>
+            <td style="padding:30px;">
+              <h3 style="color:#111827; margin:0 0 8px;">🎯 Why You’ll Love It</h3>
+              <ul style="color:#4b5563; font-size:14px; line-height:1.8; margin:0; padding-left:20px;">
+                <li>⚡ Save time by automating repetitive tasks</li>
+                <li>📈 Get instant insights without writing SQL</li>
+                <li>🔔 Stay organized with smart reminders</li>
+                <li>🔐 Secure, audited, and reliable</li>
+              </ul>
+            </td>
+          </tr>
+
+          <!-- CTA Button -->
+          <tr>
+            <td align="center" style="padding:10px 20px 30px;">
+              <a href="{{AppLink}}" style="background:#4f46e5; color:#ffffff; padding:12px 28px; text-decoration:none; border-radius:6px; font-size:14px; display:inline-block;">
+                Start Exploring →
+              </a>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background:#f9fafb; padding:20px; text-align:center; font-size:12px; color:#6b7280;">
+              Need help? Contact our support anytime.<br><br>
+              © 2026 {{CompanyName}}. All rights reserved.
+            </td>
+          </tr>
+
+        </table>
+
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

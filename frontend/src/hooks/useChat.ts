@@ -10,11 +10,17 @@ export function useChat() {
   const [error, setError] = useState<string | null>(null);
 
   const send = useCallback(
-    async (text: string, attachments: File[] = [], mode: ChatMode = "chat") => {
+    async (
+      text: string,
+      attachments: File[] = [],
+      mode: ChatMode = "chat",
+      modelOverride?: string,
+      useRag = true
+    ) => {
       if (!text.trim()) return;
       setError(null);
       try {
-        await sendMessage(text.trim(), attachments, mode);
+        await sendMessage(text.trim(), attachments, mode, modelOverride, useRag);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }

@@ -19,10 +19,21 @@ def _is_live_query(query: str) -> bool:
     return any(token in q for token in LIVE_HINTS)
 
 
-def run_live_query(query: str, user_email: str, model: str | None = None) -> dict[str, Any]:
+def run_live_query(
+    query: str,
+    user_email: str,
+    model: str | None = None,
+    history: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     live_data = api_service.get_live_data(query)
     if live_data.get("has_data"):
-        answer = llm_service.ask_llm(query, live_data, user_email=user_email, model=model)
+        answer = llm_service.ask_llm(
+            query,
+            live_data,
+            user_email=user_email,
+            model=model,
+            history=history,
+        )
         return {
             "mode": "live",
             "query": query,
@@ -32,7 +43,12 @@ def run_live_query(query: str, user_email: str, model: str | None = None) -> dic
             "fallback_used": False,
         }
 
-    answer = llm_service.ask_llm_fallback(query, user_email=user_email, model=model)
+    answer = llm_service.ask_llm_fallback(
+        query,
+        user_email=user_email,
+        model=model,
+        history=history,
+    )
     return {
         "mode": "fallback",
         "query": query,
@@ -48,7 +64,8 @@ def chat(messages: list[ChatMessage], model: str | None = None) -> ChatResponse:
     last_user = next((m.content for m in reversed(messages) if m.role == "user"), "")
 
     if _is_live_query(last_user):
-        live = run_live_query(last_user, user_email="anonymous", model=chosen)
+        history = [{"role": m.role, "content": m.content} for m in messages[:-1]]
+        live = run_live_query(last_user, user_email="anonymous", model=chosen, history=history)
         content = live.get("answer", "")
     else:
         client = get_llm_client()
