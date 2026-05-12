@@ -20,6 +20,9 @@ env/
 !package.json
 !package-lock.json
 !tsconfig.json
+!frontend/tsconfig.app.json
+!frontend/tsconfig.node.json
+!frontend/vercel.json
 !*.config.json
 
 # ChromaDB persistence (P7)

@@ -5,7 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const backendUrl = env.VITE_API_BASE_URL || 'http://localhost:8000'
+  const backendUrl = env.VITE_API_BASE || 'http://localhost:8000'
 
   return {
     plugins: [react(), tailwindcss()],
@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     define: {
-      // Makes VITE_API_BASE_URL available as import.meta.env.VITE_API_BASE_URL
+      // Exposes resolved backend URL for optional compile-time usage.
       __BACKEND_URL__: JSON.stringify(backendUrl),
     },
   }
