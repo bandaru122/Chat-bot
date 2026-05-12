@@ -1,0 +1,72 @@
+services:
+  # ── FastAPI backend ──────────────────────────────────────────────────────────
+  - type: web
+    name: amzur-ai-chat-backend
+    runtime: python
+    region: oregon
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # ── Secrets (fill in Render dashboard → Environment) ──────────────────
+      - key: SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: amzur-ai-chat-db
+          property: connectionString
+      - key: LITELLM_PROXY_URL
+        sync: false
+      - key: LITELLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: gemini/gemini-2.5-flash
+      - key: LITELLM_EMBEDDING_MODEL
+        value: text-embedding-3-large
+      - key: IMAGE_GEN_MODEL
+        value: gemini/imagen-4.0-fast-generate-001
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false          # set to https://<your-backend>.onrender.com/api/auth/google/callback
+      - key: FRONTEND_ORIGIN
+        sync: false          # set to https://<your-project>.vercel.app
+      - key: BACKEND_PUBLIC_URL
+        sync: false          # set to https://<your-backend>.onrender.com
+      - key: CHROMA_PERSIST_DIR
+        value: /opt/render/project/src/chroma_db
+      - key: UPLOAD_DIR
+        value: /opt/render/project/src/uploads
+      - key: MCP_DATA_DIR
+        value: /opt/render/project/src/data
+      # Optional keys — leave blank if not used
+      - key: NEWSAPI_KEY
+        sync: false
+      - key: CRICAPI_KEY
+        sync: false
+      - key: THENEWSAPI_TOKEN
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+
+  # ── PostgreSQL database ──────────────────────────────────────────────────────
+databases:
+  - name: amzur-ai-chat-db
+    region: oregon
+    plan: free
+    databaseName: amzur_ai_chat
+    user: amzur
