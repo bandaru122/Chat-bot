@@ -24,7 +24,7 @@ from app.core.config import settings
 from app.models import ChatMessageRow, ChatThread, User
 from app.services.rich_content import generate_chart_or_text_response, is_visualization_request
 from app.services import sql_service, api_service, llm_service
-from app.services.sheets_service import read_sheet
+from app.services.sheets_service import read_sheet, service_account_email
 
 # Live-signal keywords — auto-triggers real API fetch before LLM reply.
 # ONLY specific domain keywords are listed. Generic time words (today, now, current, latest)
@@ -847,6 +847,7 @@ def _generate_assistant_reply(
         if mode_lower == "sql":
             sql_model = llm_model if _model_type(llm_model) == "chat" else settings.LLM_MODEL
             question = raw_prompt if isinstance(raw_prompt, str) else (prompt if isinstance(prompt, str) else str(prompt))
+            sheet_urls = _sheet_urls(question)
 
             tabular_sources = _collect_tabular_sources(question)
             if tabular_sources:
@@ -869,6 +870,23 @@ def _generate_assistant_reply(
                         }
                     )
                 return json.dumps({"type": "text", "content": answer})
+
+            if sheet_urls:
+                try:
+                    sa_email = service_account_email()
+                except Exception:
+                    sa_email = "<service-account-email-unavailable>"
+                return json.dumps(
+                    {
+                        "type": "text",
+                        "content": (
+                            "I found a Google Sheet URL but could not read it. "
+                            "Please either share the sheet with this service account (Viewer): "
+                            f"{sa_email} "
+                            "or set the sheet to public read access."
+                        ),
+                    }
+                )
 
             sql, columns, rows = sql_service.ask_database(
                 question=question,
