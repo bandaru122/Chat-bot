@@ -25,6 +25,7 @@ from app.schemas.sql import (
     SQLGenerateRequest,
     SQLGenerateResponse,
 )
+from app.schemas.dataframe import DataframeAskRequest, DataframeAskResponse
 
 __all__ = [
     "NoteBase",
@@ -44,6 +45,8 @@ __all__ = [
     "SQLGenerateResponse",
     "SQLAskRequest",
     "SQLAskResponse",
+    "DataframeAskRequest",
+    "DataframeAskResponse",
     "UserOut",
     "RegisterRequest",
     "LoginRequest",

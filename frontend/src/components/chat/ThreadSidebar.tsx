@@ -1,13 +1,15 @@
-import { LogOut, MessageSquarePlus, Pencil, Search, Sparkles, Trash2 } from "lucide-react";
+import { LogOut, MessageSquarePlus, Pencil, Search, Sparkles, Table2, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useAuthStore } from "../../lib/authStore";
 import { useChatStore } from "../../lib/chatStore";
 
 interface Props {
   collapsed: boolean;
+  activeView: "chat" | "sheet-qa";
+  onSelectView: (view: "chat" | "sheet-qa") => void;
 }
 
-export default function ThreadSidebar({ collapsed }: Props) {
+export default function ThreadSidebar({ collapsed, activeView, onSelectView }: Props) {
   const threads = useChatStore((s) => s.threads);
   const activeId = useChatStore((s) => s.activeId);
   const loadThreads = useChatStore((s) => s.loadThreads);
@@ -74,7 +76,10 @@ export default function ThreadSidebar({ collapsed }: Props) {
 
       <div className="px-3">
         <button
-          onClick={() => createThread()}
+          onClick={() => {
+            onSelectView("chat");
+            createThread();
+          }}
           className={
             "group flex w-full cursor-pointer items-center rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-slate-100 transition hover:border-accent-500/50 hover:bg-white/10 " +
             (collapsed ? "justify-center" : "gap-2")
@@ -152,7 +157,10 @@ export default function ThreadSidebar({ collapsed }: Props) {
                       ? "bg-white/10 text-white"
                       : "text-slate-300 hover:bg-white/5 hover:text-white")
                   }
-                  onClick={() => selectThread(t.id)}
+                  onClick={() => {
+                    onSelectView("chat");
+                    selectThread(t.id);
+                  }}
                 >
                   <div className={"flex w-full items-center " + (collapsed ? "justify-center" : "gap-2")}> 
                     {!collapsed && <span className="truncate flex-1">{t.title || "Untitled"}</span>}
@@ -195,6 +203,24 @@ export default function ThreadSidebar({ collapsed }: Props) {
           );
         })}
       </nav>
+
+      <div className="px-3 pb-3">
+        <button
+          type="button"
+          onClick={() => onSelectView("sheet-qa")}
+          className={
+            "group flex w-full items-center rounded-lg border px-3 py-2 text-sm font-medium transition " +
+            (activeView === "sheet-qa"
+              ? "border-emerald-400/50 bg-emerald-500/15 text-emerald-200"
+              : "border-white/10 bg-white/5 text-slate-200 hover:border-emerald-400/40 hover:bg-white/10") +
+            (collapsed ? " justify-center" : " gap-2")
+          }
+          title="Spreadsheet Q&A"
+        >
+          <Table2 className="h-4 w-4" />
+          {!collapsed && "Spreadsheet Q&A"}
+        </button>
+      </div>
 
       <div className="border-t border-white/5 px-4 py-3">
         <div className={"flex items-center " + (collapsed ? "justify-center" : "gap-2")}>

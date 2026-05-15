@@ -63,3 +63,20 @@ export interface UploadedFileAsset {
 
 export type ChatMode = "chat" | "sql" | "live";
 
+export interface DataframeAskRequest {
+  question: string;
+  model?: string;
+  google_sheet_url?: string;
+  worksheet?: string;
+  uploaded_file_url?: string;
+  max_rows?: number;
+}
+
+export interface DataframeAskResponse {
+  answer: string;
+  row_count: number;
+  columns: string[];
+  source: string;
+  intermediate_steps: string[];
+}
+

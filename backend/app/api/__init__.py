@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from app.api import agent as agent_routes
 from app.api import auth as auth_routes
 from app.api import chat as chat_routes
+from app.api import dataframe as dataframe_routes
 from app.api import files as files_routes
 from app.api import models as models_routes
 from app.api import notes as notes_routes
@@ -18,6 +19,7 @@ api_router.include_router(models_routes.router)
 api_router.include_router(files_routes.router)
 api_router.include_router(notes_routes.router)
 api_router.include_router(chat_routes.router)
+api_router.include_router(dataframe_routes.router)
 api_router.include_router(sheets_routes.router)
 api_router.include_router(sql_routes.router)
 api_router.include_router(agent_routes.router)

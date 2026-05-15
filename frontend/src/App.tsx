@@ -7,6 +7,7 @@ import { useAuthStore } from "./lib/authStore";
 import { useSettingsStore } from "./lib/settingsStore";
 import ChatPage from "./pages/ChatPage";
 import LoginPage from "./pages/LoginPage";
+import SheetQaPage from "./pages/SheetQaPage";
 
 export default function App() {
   const user = useAuthStore((s) => s.user);
@@ -38,6 +39,7 @@ function AuthenticatedApp() {
 
   const loadAvailableModels = useSettingsStore((s) => s.loadAvailableModels);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [activeView, setActiveView] = useState<"chat" | "sheet-qa">("chat");
 
   useEffect(() => {
     loadAvailableModels();
@@ -47,6 +49,8 @@ function AuthenticatedApp() {
     <div className="app-backdrop flex h-full min-h-0 w-full">
       <ThreadSidebar
         collapsed={sidebarCollapsed}
+        activeView={activeView}
+        onSelectView={setActiveView}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar
@@ -55,7 +59,11 @@ function AuthenticatedApp() {
           onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
         />
         <main className="min-h-0 flex-1 overflow-hidden">
-          <ChatPage />
+          {activeView === "chat" ? (
+            <ChatPage />
+          ) : (
+            <SheetQaPage onBackToChat={() => setActiveView("chat")} />
+          )}
         </main>
       </div>
     </div>

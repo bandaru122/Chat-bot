@@ -2,6 +2,8 @@
 import type {
   ChatMessage,
   ChatResponse,
+  DataframeAskRequest,
+  DataframeAskResponse,
   HealthResponse,
   Note,
   Thread,
@@ -305,5 +307,11 @@ export const api = {
       ? lastNetworkError
       : new Error("Unable to reach backend API");
   },
+
+  dataframeAsk: (payload: DataframeAskRequest) =>
+    http<DataframeAskResponse>("/api/dataframe/ask", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }, LLM_REQUEST_TIMEOUT_MS),
 };
 
