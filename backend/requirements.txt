@@ -23,6 +23,7 @@ langchain-experimental==0.3.4
 langgraph==0.2.62
 pandas==2.2.3
 openpyxl==3.1.5
+tabulate==0.10.0
 
 # Auth (Google OAuth + email/password)
 authlib==1.3.2
