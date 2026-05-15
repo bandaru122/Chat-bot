@@ -733,10 +733,35 @@ def _generate_assistant_reply(
     if mtype == "chat":
         mode_lower = (mode or "").lower()
         question = raw_prompt if isinstance(raw_prompt, str) else (prompt if isinstance(prompt, str) else str(prompt))
+        sheet_urls = _sheet_urls(question)
         bounded_history = _bounded_history(history)
         if not use_rag:
             bounded_history = _history_without_attachment_context(bounded_history)
         has_attachments = bool(_attachment_entries(question)) or bool(_history_attachment_entries(bounded_history))
+
+        # Spreadsheet links in chat should be answered from sheet data directly,
+        # not routed to generic chat/live logic.
+        if mode_lower != "sql" and sheet_urls:
+            tabular_sources = _collect_tabular_sources(question)
+            if tabular_sources:
+                answer, _columns, _rows = _ask_tabular_sources(
+                    client=client,
+                    llm_model=llm_model,
+                    user_email=user_email,
+                    question=question,
+                    sources=tabular_sources,
+                )
+                return answer
+            try:
+                sa_email = service_account_email()
+            except Exception:
+                sa_email = "<service-account-email-unavailable>"
+            return (
+                "I found a Google Sheet URL but could not read it. "
+                "Please either share the sheet with this service account (Viewer): "
+                f"{sa_email} "
+                "or set the sheet to public read access."
+            )
 
         # ── Live data mode ─────────────────────────────────────────────────────
         # Triggered when mode="live" OR the query contains a recognised live keyword.
@@ -749,6 +774,8 @@ def _generate_assistant_reply(
             auto_live = auto_live or api_service._is_search_related_query(question)
         except Exception:
             pass
+        if sheet_urls:
+            auto_live = False
         # Attachment-related questions should use attachment/RAG context first,
         # not live web-search routing.
         if has_attachments:
